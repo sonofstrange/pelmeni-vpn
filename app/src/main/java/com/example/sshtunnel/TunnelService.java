@@ -327,8 +327,11 @@ public class TunnelService extends Service {
             SecureStore store = new SecureStore(this);
             String configuredHost = store.getPlain("host", "").trim();
             boolean tlsEnabled = TlsTransport.isEnabledFor(store, configuredHost);
+            ServerProfiles.Profile activeProfile = ServerProfiles.active(store);
             statsIntent.putExtra("debug_enabled", true)
                     .putExtra("debug_version", BuildConfig.VERSION_NAME)
+                    .putExtra("debug_profile", activeProfile == null
+                            ? "—" : activeProfile.name)
                     .putExtra("debug_status", currentStatus)
                     .putExtra("debug_ssh_connected",
                             currentSession != null && currentSession.isConnected())
@@ -466,8 +469,11 @@ public class TunnelService extends Service {
 
         String latency = currentLatency >= 0 ? currentLatency + " мс" : "—";
         String metrics = "Скорость: " + formatRate(currentSpeed) + " · Пинг: " + latency;
-        String title = Branding.appName(this) + " · "
-                + TunnelMode.label(new SecureStore(this));
+        SecureStore store = new SecureStore(this);
+        ServerProfiles.Profile activeProfile = ServerProfiles.active(store);
+        String title = Branding.appName(this)
+                + (activeProfile == null ? "" : " · " + activeProfile.name)
+                + " · " + TunnelMode.label(store);
         return new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(android.R.drawable.stat_sys_upload_done)
                 .setContentTitle(title)

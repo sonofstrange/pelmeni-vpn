@@ -140,6 +140,7 @@
         </LinearLayout>
 
         <TextView
+            android:id="@+id/serverSectionTitle"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="18dp"
@@ -148,18 +149,71 @@
             android:textSize="16sp"
             android:textStyle="bold" />
 
+        <LinearLayout
+            android:id="@+id/serverProfileCard"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/panel_background"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:id="@+id/serverName"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Сервер не добавлен"
+                android:textColor="#17211B"
+                android:textSize="19sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/serverAddress"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="3dp"
+                android:text="Добавь первый сервер"
+                android:textColor="#65736A"
+                android:textSize="14sp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/serverSelect"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="СМЕНИТЬ" />
+
+                <Button
+                    android:id="@+id/serverEdit"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:layout_weight="1"
+                    android:text="ПАРАМЕТРЫ" />
+            </LinearLayout>
+        </LinearLayout>
+
         <EditText
             android:id="@+id/host"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:hint="IP-адрес или домен"
             android:inputType="textUri"
-            android:singleLine="true" />
+            android:singleLine="true"
+            android:visibility="gone" />
 
         <LinearLayout
+            android:id="@+id/legacyPorts"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal">
+            android:orientation="horizontal"
+            android:visibility="gone">
 
             <EditText
                 android:id="@+id/port"
@@ -187,7 +241,8 @@
             android:layout_height="wrap_content"
             android:hint="Пользователь SSH"
             android:inputType="text"
-            android:singleLine="true" />
+            android:singleLine="true"
+            android:visibility="gone" />
 
         <EditText
             android:id="@+id/password"
@@ -195,13 +250,15 @@
             android:layout_height="wrap_content"
             android:hint="Пароль SSH"
             android:inputType="textPassword"
-            android:singleLine="true" />
+            android:singleLine="true"
+            android:visibility="gone" />
 
         <CheckBox
             android:id="@+id/showPassword"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Показать пароль" />
+            android:text="Показать пароль"
+            android:visibility="gone" />
 
         <CheckBox
             android:id="@+id/autoReconnect"
@@ -221,7 +278,8 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="СОХРАНИТЬ НАСТРОЙКИ" />
+            android:text="СОХРАНИТЬ НАСТРОЙКИ"
+            android:visibility="gone" />
 
         <Button
             android:id="@+id/toggle"

@@ -99,6 +99,77 @@ final class TlsTransport {
                 USER_DISABLED_KEY);
     }
 
+    static void snapshotForProfile(SecureStore store, String profileId) {
+        deleteProfileState(store, profileId);
+        try {
+            byte[] bundle = store.getEncrypted(BUNDLE_KEY);
+            byte[] password = store.getEncrypted(PASSWORD_KEY);
+            if (bundle != null) store.putEncrypted(profileKey(profileId, BUNDLE_KEY), bundle);
+            if (password != null) {
+                store.putEncrypted(profileKey(profileId, PASSWORD_KEY), password);
+            }
+        } catch (Exception error) {
+            throw new IllegalStateException(error);
+        }
+        copyPlainToProfile(store, profileId, "tls_host", "");
+        copyPlainToProfile(store, profileId, "tls_port",
+                Integer.toString(DEFAULT_PORT));
+        copyPlainToProfile(store, profileId, "tls_ports", "");
+        store.putBoolean(profileKey(profileId, "tls_enabled"),
+                store.getBoolean("tls_enabled", false));
+        store.putBoolean(profileKey(profileId, USER_DISABLED_KEY),
+                store.getBoolean(USER_DISABLED_KEY, false));
+    }
+
+    static void restoreForProfile(SecureStore store, String profileId) {
+        clear(store);
+        try {
+            byte[] bundle = store.getEncrypted(profileKey(profileId, BUNDLE_KEY));
+            byte[] password = store.getEncrypted(profileKey(profileId, PASSWORD_KEY));
+            if (bundle != null) store.putEncrypted(BUNDLE_KEY, bundle);
+            if (password != null) store.putEncrypted(PASSWORD_KEY, password);
+        } catch (Exception error) {
+            throw new IllegalStateException(error);
+        }
+        copyPlainFromProfile(store, profileId, "tls_host");
+        copyPlainFromProfile(store, profileId, "tls_port");
+        copyPlainFromProfile(store, profileId, "tls_ports");
+        String enabledKey = profileKey(profileId, "tls_enabled");
+        String disabledKey = profileKey(profileId, USER_DISABLED_KEY);
+        if (store.contains(enabledKey)) {
+            store.putBoolean("tls_enabled", store.getBoolean(enabledKey, false));
+        }
+        if (store.contains(disabledKey)) {
+            store.putBoolean(USER_DISABLED_KEY, store.getBoolean(disabledKey, false));
+        }
+    }
+
+    static void deleteProfileState(SecureStore store, String profileId) {
+        store.removeEncrypted(profileKey(profileId, BUNDLE_KEY));
+        store.removeEncrypted(profileKey(profileId, PASSWORD_KEY));
+        store.remove(profileKey(profileId, "tls_host"),
+                profileKey(profileId, "tls_port"),
+                profileKey(profileId, "tls_ports"),
+                profileKey(profileId, "tls_enabled"),
+                profileKey(profileId, USER_DISABLED_KEY));
+    }
+
+    private static void copyPlainToProfile(
+            SecureStore store, String profileId, String key, String fallback) {
+        String value = store.getPlain(key, fallback);
+        if (!value.isEmpty()) store.putPlain(profileKey(profileId, key), value);
+    }
+
+    private static void copyPlainFromProfile(
+            SecureStore store, String profileId, String key) {
+        String value = store.getPlain(profileKey(profileId, key), "");
+        if (!value.isEmpty()) store.putPlain(key, value);
+    }
+
+    private static String profileKey(String profileId, String key) {
+        return "profile_" + profileId + "_" + key;
+    }
+
     static SocketFactory socketFactory(
             SecureStore store, Network network) throws Exception {
         byte[] bundle = store.getEncrypted(BUNDLE_KEY);

@@ -11,8 +11,10 @@ import java.net.Proxy;
 import java.net.URL;
 
 final class UpdateChecker {
-    private static final String LATEST_RELEASE =
+    private static final String LATEST_STABLE =
             "https://api.github.com/repos/sonofstrange/pelmeni-vpn/releases/latest";
+    private static final String ALL_RELEASES =
+            "https://api.github.com/repos/sonofstrange/pelmeni-vpn/releases?per_page=20";
 
     static final class Result {
         final String version;
@@ -20,26 +22,33 @@ final class UpdateChecker {
         final String pageUrl;
         final String downloadUrl;
         final long size;
+        final boolean prerelease;
 
         Result(String version, String notes, String pageUrl,
-               String downloadUrl, long size) {
+               String downloadUrl, long size, boolean prerelease) {
             this.version = version;
             this.notes = notes;
             this.pageUrl = pageUrl;
             this.downloadUrl = downloadUrl;
             this.size = size;
+            this.prerelease = prerelease;
         }
     }
 
     static Result check(SecureStore store) throws Exception {
+        return check(store, false);
+    }
+
+    static Result check(SecureStore store, boolean includePrereleases) throws Exception {
+        String endpoint = includePrereleases ? ALL_RELEASES : LATEST_STABLE;
         java.net.URLConnection rawConnection;
         if (TunnelService.isConnected()) {
             Proxy proxy = new Proxy(Proxy.Type.SOCKS,
                     new InetSocketAddress("127.0.0.1",
                             TunnelMode.testSocksPort(store)));
-            rawConnection = new URL(LATEST_RELEASE).openConnection(proxy);
+            rawConnection = new URL(endpoint).openConnection(proxy);
         } else {
-            rawConnection = new URL(LATEST_RELEASE).openConnection();
+            rawConnection = new URL(endpoint).openConnection();
         }
         HttpURLConnection connection = (HttpURLConnection) rawConnection;
         connection.setConnectTimeout(10_000);
@@ -67,8 +76,34 @@ final class UpdateChecker {
             connection.disconnect();
         }
 
-        JSONObject release = new JSONObject(
-                new String(bytes, java.nio.charset.StandardCharsets.UTF_8));
+        String response = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+        JSONObject release;
+        if (includePrereleases) {
+            JSONArray releases = new JSONArray(response);
+            release = newestRelease(releases);
+            if (release == null) return null;
+        } else {
+            release = new JSONObject(response);
+        }
+        return resultFrom(release);
+    }
+
+    private static JSONObject newestRelease(JSONArray releases) {
+        JSONObject newest = null;
+        for (int i = 0; i < releases.length(); i++) {
+            JSONObject candidate = releases.optJSONObject(i);
+            if (candidate == null || candidate.optBoolean("draft", false)) continue;
+            String version = candidate.optString("tag_name", "").trim();
+            if (version.isEmpty()) continue;
+            if (newest == null || isNewer(version,
+                    newest.optString("tag_name", ""))) {
+                newest = candidate;
+            }
+        }
+        return newest;
+    }
+
+    private static Result resultFrom(JSONObject release) {
         String version = release.optString("tag_name", "").trim();
         if (version.isEmpty() || !isNewer(version, BuildConfig.VERSION_NAME)) {
             return null;
@@ -80,7 +115,8 @@ final class UpdateChecker {
         JSONArray assets = release.optJSONArray("assets");
         if (assets != null) {
             for (int i = 0; i < assets.length(); i++) {
-                JSONObject asset = assets.getJSONObject(i);
+                JSONObject asset = assets.optJSONObject(i);
+                if (asset == null) continue;
                 String name = asset.optString("name", "");
                 if (name.toLowerCase(java.util.Locale.ROOT).endsWith(".apk")) {
                     download = asset.optString("browser_download_url", page);
@@ -90,33 +126,62 @@ final class UpdateChecker {
             }
         }
         return new Result(version, release.optString("body", "").trim(),
-                page, download, size);
+                page, download, size,
+                release.optBoolean("prerelease", false));
     }
 
     static boolean isNewer(String candidate, String current) {
-        int[] left = versionParts(candidate);
-        int[] right = versionParts(current);
-        int length = Math.max(left.length, right.length);
-        for (int i = 0; i < length; i++) {
-            int a = i < left.length ? left[i] : 0;
-            int b = i < right.length ? right[i] : 0;
+        Version left = Version.parse(candidate);
+        Version right = Version.parse(current);
+        for (int i = 0; i < 3; i++) {
+            int a = left.parts[i];
+            int b = right.parts[i];
             if (a != b) return a > b;
         }
-        return false;
+        if (left.prerelease != right.prerelease) {
+            return !left.prerelease;
+        }
+        return left.prerelease && left.prereleaseNumber > right.prereleaseNumber;
     }
 
-    private static int[] versionParts(String value) {
-        String clean = value.replaceFirst("^[^0-9]*", "");
-        String[] raw = clean.split("[^0-9]+");
-        int[] parts = new int[Math.min(raw.length, 4)];
-        for (int i = 0; i < parts.length; i++) {
-            try {
-                parts[i] = Integer.parseInt(raw[i]);
-            } catch (Exception ignored) {
-                parts[i] = 0;
-            }
+    private static final class Version {
+        final int[] parts;
+        final boolean prerelease;
+        final int prereleaseNumber;
+
+        Version(int[] parts, boolean prerelease, int prereleaseNumber) {
+            this.parts = parts;
+            this.prerelease = prerelease;
+            this.prereleaseNumber = prereleaseNumber;
         }
-        return parts;
+
+        static Version parse(String value) {
+            String clean = value.trim().replaceFirst("^[^0-9]*", "");
+            String[] halves = clean.split("-", 2);
+            String[] rawParts = halves[0].split("\\.");
+            int[] parts = new int[3];
+            for (int i = 0; i < parts.length && i < rawParts.length; i++) {
+                try {
+                    parts[i] = Integer.parseInt(
+                            rawParts[i].replaceAll("[^0-9].*$", ""));
+                } catch (Exception ignored) {
+                    parts[i] = 0;
+                }
+            }
+            boolean prerelease = halves.length > 1;
+            int prereleaseNumber = 0;
+            if (prerelease) {
+                String[] numbers = halves[1].split("[^0-9]+");
+                for (String number : numbers) {
+                    if (number.isEmpty()) continue;
+                    try {
+                        prereleaseNumber = Integer.parseInt(number);
+                    } catch (Exception ignored) {
+                    }
+                }
+            }
+            return new Version(parts, prerelease, prereleaseNumber);
+        }
     }
 
     private UpdateChecker() {

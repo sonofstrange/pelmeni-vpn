@@ -48,9 +48,9 @@ public class MainActivity extends Activity {
     private static final long UPDATE_INTERVAL_MS = 24 * 60 * 60 * 1000L;
 
     private EditText host, sshPort, user, password, socksPort;
-    private TextView appTitle, status, speedPing, debugInfo;
+    private TextView appTitle, status, speedPing, debugInfo, serverName, serverAddress;
     private TextView sessionDown, sessionUp, totalDown, totalUp;
-    private Button toggle, save;
+    private Button toggle, save, serverSelect, serverEdit;
     private CheckBox showPassword, autoReconnect, startOnBoot, enableVpn, enableTelegram;
     private boolean running;
     private boolean receiverRegistered;
@@ -83,14 +83,19 @@ public class MainActivity extends Activity {
         sessionUp = findViewById(R.id.sessionUp);
         totalDown = findViewById(R.id.totalDown);
         totalUp = findViewById(R.id.totalUp);
+        serverName = findViewById(R.id.serverName);
+        serverAddress = findViewById(R.id.serverAddress);
         toggle = findViewById(R.id.toggle);
         save = findViewById(R.id.save);
+        serverSelect = findViewById(R.id.serverSelect);
+        serverEdit = findViewById(R.id.serverEdit);
         showPassword = findViewById(R.id.showPassword);
         autoReconnect = findViewById(R.id.autoReconnect);
         startOnBoot = findViewById(R.id.startOnBoot);
         enableVpn = findViewById(R.id.enableVpn);
         enableTelegram = findViewById(R.id.enableTelegram);
 
+        ServerProfiles.migrateLegacy(new SecureStore(this));
         Branding.restoreLauncherState(this);
         appTitle.setText(Branding.appName(this));
         updateDebugPanel();
@@ -113,6 +118,14 @@ public class MainActivity extends Activity {
                     : InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
             password.setSelection(Math.max(0, Math.min(position, password.length())));
         });
+        autoReconnect.setOnCheckedChangeListener((button, checked) ->
+                new SecureStore(this).putBoolean("auto_reconnect", checked));
+        startOnBoot.setOnCheckedChangeListener((button, checked) ->
+                new SecureStore(this).putBoolean("start_on_boot", checked));
+        enableVpn.setOnCheckedChangeListener((button, checked) ->
+                new SecureStore(this).putBoolean("vpn_mode", checked));
+        enableTelegram.setOnCheckedChangeListener((button, checked) ->
+                new SecureStore(this).putBoolean("telegram_proxy", checked));
 
         save.setOnClickListener(v -> {
             if (saveSettings()) {
@@ -123,6 +136,12 @@ public class MainActivity extends Activity {
         toggle.setOnClickListener(v -> {
             if (running) stopTunnel();
             else startTunnel();
+        });
+        serverSelect.setOnClickListener(v -> showServerList());
+        serverEdit.setOnClickListener(v -> {
+            ServerProfiles.Profile active =
+                    ServerProfiles.active(new SecureStore(this));
+            showServerEditor(active);
         });
         findViewById(R.id.moreActions).setOnClickListener(this::showMoreActions);
         if (getIntent().getBooleanExtra(EXTRA_START_FROM_TILE, false)) {
@@ -163,7 +182,8 @@ public class MainActivity extends Activity {
                 return true;
             }
             if (item.getItemId() == R.id.actionUpdate) {
-                maybeCheckForUpdate(true);
+                if (Branding.isSecret(this)) showUpdateChannelChoice();
+                else maybeCheckForUpdate(true, false);
                 return true;
             }
             if (item.getItemId() == R.id.actionAdvanced) {
@@ -479,7 +499,20 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void showUpdateChannelChoice() {
+        new AlertDialog.Builder(this)
+                .setTitle("Канал обновлений · debug")
+                .setItems(new String[]{"Стабильный релиз", "Бета-версия"},
+                        (ignored, which) -> maybeCheckForUpdate(true, which == 1))
+                .setNegativeButton("Отмена", null)
+                .show();
+    }
+
     private void maybeCheckForUpdate(boolean manual) {
+        maybeCheckForUpdate(manual, false);
+    }
+
+    private void maybeCheckForUpdate(boolean manual, boolean includePrereleases) {
         if (updateCheckRunning) {
             if (manual) {
                 Toast.makeText(this, "Проверка обновления уже выполняется",
@@ -496,12 +529,15 @@ public class MainActivity extends Activity {
         store.putLong("last_update_check", now);
         updateCheckRunning = true;
         if (manual) {
-            Toast.makeText(this, "Проверяем GitHub Releases…", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, includePrereleases
+                            ? "Проверяем бета-релизы…"
+                            : "Проверяем стабильные GitHub Releases…",
+                    Toast.LENGTH_SHORT).show();
         }
         speedWorker.execute(() -> {
             try {
                 UpdateChecker.Result result =
-                        UpdateChecker.check(new SecureStore(this));
+                        UpdateChecker.check(new SecureStore(this), includePrereleases);
                 runOnUiThread(() -> {
                     updateCheckRunning = false;
                     if (isFinishing() || isDestroyed()) return;
@@ -535,7 +571,8 @@ public class MainActivity extends Activity {
                 : result.notes.substring(0, Math.min(result.notes.length(), 2000));
         String size = result.size > 0 ? "\nРазмер APK: " + formatBytes(result.size) : "";
         new AlertDialog.Builder(this)
-                .setTitle("Доступно обновление " + result.version)
+                .setTitle((result.prerelease ? "Доступна бета " : "Доступно обновление ")
+                        + result.version)
                 .setMessage("Установлена версия " + BuildConfig.VERSION_NAME + size
                         + "\n\n" + notes
                         + "\n\nAndroid попросит подтвердить установку обновления.")
@@ -669,6 +706,7 @@ public class MainActivity extends Activity {
         store.putPlain("ssh_window_kib", Integer.toString(window));
         store.putPlain("ssh_packet_kib", Integer.toString(packet));
         store.putPlain("vpn_mtu", Integer.toString(mtu));
+        ServerProfiles.updateActiveTuning(store, window, packet, mtu);
     }
 
     private void resetRuntimeState() {
@@ -726,6 +764,14 @@ public class MainActivity extends Activity {
 
     private void loadSettings() {
         SecureStore store = new SecureStore(this);
+        ServerProfiles.migrateLegacy(store);
+        ServerProfiles.Profile active = ServerProfiles.active(store);
+        if (active != null) {
+            try {
+                ServerProfiles.activate(store, active.id);
+            } catch (Exception ignored) {
+            }
+        }
         TlsTransport.enableAutomatically(store, store.getPlain("host", "").trim());
         host.setText(store.getPlain("host", ""));
         sshPort.setText(store.getPlain("port", "22"));
@@ -737,6 +783,7 @@ public class MainActivity extends Activity {
         boolean vpnEnabled = store.getBoolean("vpn_mode", false);
         enableVpn.setChecked(vpnEnabled);
         enableTelegram.setChecked(store.getBoolean("telegram_proxy", !vpnEnabled));
+        updateServerCard();
     }
 
     private boolean saveSettings() {
@@ -774,6 +821,8 @@ public class MainActivity extends Activity {
             store.putBoolean("vpn_mode", enableVpn.isChecked());
             store.putBoolean("telegram_proxy", enableTelegram.isChecked());
             store.putSecret(pw);
+            ServerProfiles.updateActiveConnection(store, h, p, u, pw, sp);
+            updateServerCard();
             return true;
         } catch (Exception e) {
             Toast.makeText(this, "Не удалось безопасно сохранить пароль", Toast.LENGTH_LONG).show();
@@ -792,6 +841,200 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {
             return false;
         }
+    }
+
+    private void updateServerCard() {
+        ServerProfiles.Profile active =
+                ServerProfiles.active(new SecureStore(this));
+        if (active == null) {
+            serverName.setText("Сервер не добавлен");
+            serverAddress.setText("Добавь первый сервер");
+            serverSelect.setText("ДОБАВИТЬ");
+            serverEdit.setText("ДОБАВИТЬ");
+            return;
+        }
+        serverName.setText(active.name);
+        serverAddress.setText(active.host + ":" + active.sshPort
+                + " · " + active.user);
+        serverSelect.setText("СМЕНИТЬ");
+        serverEdit.setText("ПАРАМЕТРЫ");
+    }
+
+    private void showServerList() {
+        SecureStore store = new SecureStore(this);
+        List<ServerProfiles.Profile> profiles = ServerProfiles.list(store);
+        if (profiles.isEmpty()) {
+            showServerEditor(null);
+            return;
+        }
+        String[] labels = new String[profiles.size()];
+        ServerProfiles.Profile active = ServerProfiles.active(store);
+        for (int i = 0; i < profiles.size(); i++) {
+            ServerProfiles.Profile profile = profiles.get(i);
+            labels[i] = (active != null && active.id.equals(profile.id) ? "✓ " : "")
+                    + profile.name + "\n" + profile.host + ":" + profile.sshPort;
+        }
+        AlertDialog.Builder builder = new AlertDialog.Builder(this)
+                .setTitle("Выбери сервер")
+                .setItems(labels, (ignored, which) ->
+                        switchToServer(profiles.get(which)))
+                .setNegativeButton("Закрыть", null);
+        if (!running) {
+            builder.setNeutralButton("Добавить сервер",
+                    (ignored, which) -> showServerEditor(null));
+        }
+        builder.show();
+    }
+
+    private void switchToServer(ServerProfiles.Profile profile) {
+        SecureStore store = new SecureStore(this);
+        ServerProfiles.Profile active = ServerProfiles.active(store);
+        if (active != null && active.id.equals(profile.id)) return;
+        boolean reconnect = running;
+        if (reconnect) stopTunnel();
+        try {
+            ServerProfiles.activate(store, profile.id);
+            loadSettings();
+            Toast.makeText(this, "Выбран сервер «" + profile.name + "»",
+                    Toast.LENGTH_SHORT).show();
+            if (reconnect) toggle.postDelayed(this::startTunnel, 900);
+        } catch (Exception error) {
+            Toast.makeText(this, "Не удалось переключить сервер",
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void showServerEditor(ServerProfiles.Profile profile) {
+        if (running) {
+            Toast.makeText(this, "Сначала отключи туннель", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        SecureStore store = new SecureStore(this);
+        LinearLayout fields = new LinearLayout(this);
+        fields.setOrientation(LinearLayout.VERTICAL);
+        int padding = (int) (20 * getResources().getDisplayMetrics().density);
+        fields.setPadding(padding, 4, padding, 4);
+
+        EditText profileName = addServerField(fields, "Название сервера",
+                profile == null ? "" : profile.name,
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        EditText profileHost = addServerField(fields, "IP-адрес или домен",
+                profile == null ? "" : profile.host,
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        EditText profileSshPort = addServerField(fields, "SSH-порт",
+                profile == null ? "22" : profile.sshPort,
+                InputType.TYPE_CLASS_NUMBER);
+        EditText profileSocksPort = addServerField(fields, "Локальный SOCKS5-порт",
+                profile == null ? "1080" : profile.socksPort,
+                InputType.TYPE_CLASS_NUMBER);
+        EditText profileUser = addServerField(fields, "Пользователь SSH",
+                profile == null ? "root" : profile.user,
+                InputType.TYPE_CLASS_TEXT);
+        EditText profilePassword = addServerField(fields, "Пароль SSH",
+                profile == null ? "" : ServerProfiles.password(store, profile.id),
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        EditText profileWindow = addTuningField(fields,
+                "Окно SSH · КиБ", "Буфер передачи. Рекомендуется 1024.",
+                profile == null ? NetworkTuning.DEFAULT_WINDOW_KIB : profile.windowKiB);
+        EditText profilePacket = addTuningField(fields,
+                "Пакет SSH · КиБ", "Размер блока. Рекомендуется 32.",
+                profile == null ? NetworkTuning.DEFAULT_PACKET_KIB : profile.packetKiB);
+        EditText profileMtu = addTuningField(fields,
+                "MTU VPN", "8500 быстрее; 1500 полезно при зависаниях.",
+                profile == null ? NetworkTuning.DEFAULT_MTU : profile.mtu);
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(fields);
+        AlertDialog.Builder builder = new AlertDialog.Builder(this)
+                .setTitle(profile == null ? "Новый сервер" : "Параметры сервера")
+                .setView(scroll)
+                .setPositiveButton("Сохранить", null)
+                .setNegativeButton("Отмена", null);
+        if (profile != null && ServerProfiles.list(store).size() > 1) {
+            builder.setNeutralButton("Удалить", null);
+        }
+        AlertDialog dialog = builder.create();
+        dialog.setOnShowListener(ignored -> {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                String h = profileHost.getText().toString().trim();
+                String ssh = profileSshPort.getText().toString().trim();
+                String socks = profileSocksPort.getText().toString().trim();
+                String u = profileUser.getText().toString().trim();
+                String pw = profilePassword.getText().toString();
+                int window = parseInt(profileWindow);
+                int packet = parseInt(profilePacket);
+                int mtu = parseInt(profileMtu);
+                if (!validHost(h) || !validPort(ssh) || !validPort(socks)
+                        || u.isEmpty() || pw.isEmpty()
+                        || !NetworkTuning.valid(window, NetworkTuning.MIN_WINDOW_KIB,
+                        NetworkTuning.MAX_WINDOW_KIB)
+                        || !NetworkTuning.valid(packet, NetworkTuning.MIN_PACKET_KIB,
+                        NetworkTuning.MAX_PACKET_KIB)
+                        || !NetworkTuning.valid(mtu, NetworkTuning.MIN_MTU,
+                        NetworkTuning.MAX_MTU)) {
+                    Toast.makeText(this, "Проверь адрес, порты, пароль и диапазоны тюнинга",
+                            Toast.LENGTH_LONG).show();
+                    return;
+                }
+                String name = profileName.getText().toString().trim();
+                if (name.isEmpty()) name = h;
+                ServerProfiles.Profile updated = new ServerProfiles.Profile(
+                        profile == null
+                                ? ServerProfiles.create(name, h, ssh, u, socks,
+                                window, packet, mtu).id
+                                : profile.id,
+                        name, h, ssh, u, socks, window, packet, mtu);
+                try {
+                    ServerProfiles.saveAndActivate(store, updated, pw);
+                    loadSettings();
+                    dialog.dismiss();
+                    Toast.makeText(this, "Сервер сохранён", Toast.LENGTH_SHORT).show();
+                    maybeOfferTlsForCurrentServer(null);
+                } catch (Exception error) {
+                    Toast.makeText(this, "Не удалось сохранить сервер",
+                            Toast.LENGTH_LONG).show();
+                }
+            });
+            if (profile != null && dialog.getButton(AlertDialog.BUTTON_NEUTRAL) != null) {
+                dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v ->
+                        confirmDeleteServer(dialog, profile));
+            }
+        });
+        dialog.show();
+    }
+
+    private EditText addServerField(
+            LinearLayout parent, String hint, String value, int inputType) {
+        EditText field = new EditText(this);
+        field.setHint(hint);
+        field.setText(value);
+        field.setInputType(inputType);
+        field.setSingleLine(true);
+        parent.addView(field);
+        return field;
+    }
+
+    private void confirmDeleteServer(
+            AlertDialog editor, ServerProfiles.Profile profile) {
+        new AlertDialog.Builder(this)
+                .setTitle("Удалить сервер «" + profile.name + "»?")
+                .setMessage("Будут удалены сохранённый пароль, TLS-ключи и параметры "
+                        + "этого профиля. Сам сервер изменён не будет.")
+                .setPositiveButton("Удалить", (ignored, which) -> {
+                    try {
+                        if (ServerProfiles.delete(new SecureStore(this), profile.id)) {
+                            editor.dismiss();
+                            loadSettings();
+                            Toast.makeText(this, "Профиль сервера удалён",
+                                    Toast.LENGTH_SHORT).show();
+                        }
+                    } catch (Exception error) {
+                        Toast.makeText(this, "Не удалось удалить профиль",
+                                Toast.LENGTH_LONG).show();
+                    }
+                })
+                .setNegativeButton("Отмена", null)
+                .show();
     }
 
     private void beginExport() {
@@ -815,8 +1058,11 @@ public class MainActivity extends Activity {
         try (OutputStream output = getContentResolver().openOutputStream(uri, "wt")) {
             if (output == null) throw new Exception("No output stream");
             SecureStore store = new SecureStore(this);
+            ServerProfiles.Profile active = ServerProfiles.active(store);
             JSONObject config = new JSONObject()
                     .put("format", 1)
+                    .put("name", active == null ? host.getText().toString().trim()
+                            : active.name)
                     .put("host", host.getText().toString().trim())
                     .put("ssh_port", Integer.parseInt(sshPort.getText().toString().trim()))
                     .put("username", user.getText().toString().trim())
@@ -880,19 +1126,21 @@ public class MainActivity extends Activity {
                 throw new Exception("Invalid config");
             }
 
-            host.setText(importedHost);
-            sshPort.setText(importedPort);
-            user.setText(importedUser);
-            password.setText(importedPassword);
-            socksPort.setText(importedSocksPort);
+            SecureStore store = new SecureStore(this);
+            String importedName = config.optString("name", importedHost).trim();
+            if (importedName.isEmpty()) importedName = importedHost;
+            ServerProfiles.Profile importedProfile = ServerProfiles.create(
+                    importedName, importedHost, importedPort, importedUser,
+                    importedSocksPort, importedWindow, importedPacket, importedMtu);
+            ServerProfiles.saveAndActivate(store, importedProfile, importedPassword);
+            loadSettings();
             autoReconnect.setChecked(config.optBoolean("auto_reconnect", true));
             startOnBoot.setChecked(config.optBoolean("start_on_boot", false));
             boolean importedVpn = config.optBoolean("vpn_mode", false);
             enableVpn.setChecked(importedVpn);
             enableTelegram.setChecked(config.optBoolean("telegram_proxy", !importedVpn));
             if (!saveSettings()) throw new Exception("Could not save config");
-            saveAdvancedValues(new SecureStore(this),
-                    importedWindow, importedPacket, importedMtu);
+            loadSettings();
             Toast.makeText(this, "Конфигурация импортирована", Toast.LENGTH_SHORT).show();
             maybeOfferTlsForCurrentServer(null);
         } catch (Exception error) {
@@ -937,6 +1185,7 @@ public class MainActivity extends Activity {
                 intent.getLongExtra("total_downloaded", 0));
         if (Branding.isSecret(this) && intent.getBooleanExtra("debug_enabled", false)) {
             debugInfo.setText("Версия: " + intent.getStringExtra("debug_version")
+                    + "\nПрофиль: " + intent.getStringExtra("debug_profile")
                     + "\nСтатус: " + intent.getStringExtra("debug_status")
                     + "\nSSH: "
                     + (intent.getBooleanExtra("debug_ssh_connected", false)
@@ -1017,6 +1266,10 @@ public class MainActivity extends Activity {
     }
 
     private void startTunnel() {
+        if (ServerProfiles.active(new SecureStore(this)) == null) {
+            showServerEditor(null);
+            return;
+        }
         if (Branding.isSecretInput(
                 host.getText().toString(), password.getText().toString())) {
             boolean enabled = Branding.toggleSecret(this);
@@ -1128,5 +1381,7 @@ public class MainActivity extends Activity {
         startOnBoot.setEnabled(enabled);
         enableVpn.setEnabled(enabled);
         enableTelegram.setEnabled(enabled);
+        serverSelect.setEnabled(true);
+        serverEdit.setEnabled(enabled);
     }
 }

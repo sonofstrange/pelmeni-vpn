@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/actionImport"
+        android:title="Импортировать конфиг" />
+    <item
+        android:id="@+id/actionExport"
+        android:title="Экспортировать и поделиться" />
+    <item
+        android:id="@+id/actionTelegram"
+        android:title="Добавить прокси в Telegram" />
+    <item
+        android:id="@+id/actionSpeedTest"
+        android:title="Проверка скорости" />
+    <item
+        android:id="@+id/actionAdvanced"
+        android:title="Тонкая настройка" />
+    <item
+        android:id="@+id/actionResetRuntime"
+        android:title="Сбросить временное состояние" />
+</menu>

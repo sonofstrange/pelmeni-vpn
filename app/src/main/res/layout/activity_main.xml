@@ -6,13 +6,18 @@
     android:fitsSystemWindows="true"
     android:orientation="vertical">
 
-    <ScrollView
-        android:id="@+id/mainScroll"
+    <FrameLayout
+        android:id="@+id/contentContainer"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1"
-        android:clipToPadding="false"
-        android:fillViewport="true">
+        android:layout_weight="1">
+
+        <ScrollView
+            android:id="@+id/mainScroll"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clipToPadding="false"
+            android:fillViewport="true">
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -389,7 +394,8 @@
                 android:layout_height="1dp"
                 android:visibility="gone" />
         </LinearLayout>
-    </ScrollView>
+        </ScrollView>
+    </FrameLayout>
 
     <LinearLayout
         android:layout_width="match_parent"

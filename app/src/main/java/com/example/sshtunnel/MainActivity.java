@@ -493,7 +493,7 @@ public class MainActivity extends Activity {
         }
         new AlertDialog.Builder(this)
                 .setTitle("Проверка скорости через туннель")
-                .setMessage("Тест использует примерно 13 МБ трафика и на время теста "
+                .setMessage("Тест использует примерно 18 МБ трафика и на время теста "
                         + "может увеличить пинг.")
                 .setPositiveButton("Запустить",
                         (ignored, which) -> runTunnelSpeedTest(false, null, null))
@@ -524,7 +524,7 @@ public class MainActivity extends Activity {
             try {
                 TunnelSpeedTest.Result result = TunnelSpeedTest.run(
                         new SecureStore(this), autoTune ? 4_000_000 : 10_000_000,
-                        autoTune ? 0 : 3_000_000);
+                        autoTune ? 0 : 8_000_000);
                 runOnUiThread(() -> {
                     speedTestRunning = false;
                     progress.dismiss();

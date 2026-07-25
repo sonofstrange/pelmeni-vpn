@@ -198,6 +198,20 @@ final class TlsTransport {
                 if (supported.contains("TLSv1.3")) protocols.add("TLSv1.3");
                 if (supported.contains("TLSv1.2")) protocols.add("TLSv1.2");
                 tls.setEnabledProtocols(protocols.toArray(new String[0]));
+                List<String> supportedSuites =
+                        Arrays.asList(tls.getSupportedCipherSuites());
+                List<String> fastSuites = new ArrayList<>();
+                if (supportedSuites.contains("TLS_AES_128_GCM_SHA256")) {
+                    fastSuites.add("TLS_AES_128_GCM_SHA256");
+                }
+                if (supportedSuites.contains(
+                        "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256")) {
+                    fastSuites.add("TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256");
+                }
+                if (!fastSuites.isEmpty()) {
+                    tls.setEnabledCipherSuites(
+                            fastSuites.toArray(new String[0]));
+                }
                 tls.startHandshake();
                 tls.setSoTimeout(0);
                 return tls;

@@ -34,6 +34,8 @@ import java.io.File;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -336,30 +338,59 @@ public class MainActivity extends Activity {
         speedWorker.execute(() -> {
             try {
                 SecureStore store = new SecureStore(this);
-                ServerTlsSetup.Result result = ServerTlsSetup.install(store);
                 String configuredHost = store.getPlain("host", "").trim();
-                TlsTransport.save(store, configuredHost, result.port,
-                        result.pkcs12, result.password);
+                boolean existingCredentials = TlsTransport.isConfigured(store)
+                        && configuredHost.equalsIgnoreCase(
+                        store.getPlain("tls_host", ""));
+                if (existingCredentials) {
+                    TlsTransport.setEnabled(store, true);
+                } else {
+                    ServerTlsSetup.Result result = ServerTlsSetup.install(store);
+                    TlsTransport.save(store, configuredHost, result.port,
+                            result.pkcs12, result.password);
+                }
+
+                List<Integer> configuredPorts = new ArrayList<>();
+                configuredPorts.add(TlsTransport.DEFAULT_PORT);
+                for (int fallbackPort : ServerTlsSetup.FALLBACK_PORTS) {
+                    configuredPorts.add(fallbackPort);
+                    try {
+                        ServerTlsSetup.addFallbackPort(store, fallbackPort);
+                    } catch (Exception fallbackError) {
+                        android.util.Log.e("PelmeniTLS",
+                                "Could not configure TLS fallback port "
+                                        + fallbackPort + ": "
+                                        + fallbackError.getClass().getSimpleName());
+                    }
+                }
+                TlsTransport.setAvailablePorts(store, configuredPorts);
                 try {
                     ServerTlsSetup.verify(store);
                 } catch (Exception verifyError) {
                     TlsTransport.setEnabled(store, false);
-                    throw new Exception("Сервер настроен, но проверка TLS-подключения не прошла. "
-                            + "Проверь внешний firewall для TCP-порта 443.");
+                    throw new Exception("Сервер настроен, но текущая сеть телефона не смогла "
+                            + "подключиться ни к 443, ни к резервным HTTPS-портам. "
+                            + "Вероятно, порты закрыты во внешнем firewall хостинга "
+                            + "или фильтруются оператором.", verifyError);
                 }
+                final int verifiedPort = TlsTransport.port(store);
                 runOnUiThread(() -> {
                     serverSetupRunning = false;
                     progress.dismiss();
                     if (isFinishing() || isDestroyed()) return;
                     new AlertDialog.Builder(this)
                             .setTitle("TLS-защита готова")
-                            .setMessage("Порт 443 доступен, клиентский сертификат сохранён "
+                            .setMessage("Защищённый порт " + verifiedPort
+                                    + " доступен с текущей сети телефона, клиентский сертификат сохранён "
                                     + "в зашифрованном хранилище Android, защищённое SSH-подключение "
                                     + "успешно проверено.\n\nРежим включён и применится при подключении.")
                             .setPositiveButton("Готово", null)
                             .show();
                 });
             } catch (Exception error) {
+                android.util.Log.e("PelmeniTLS",
+                        "Server setup failed: "
+                                + error.getClass().getSimpleName());
                 runOnUiThread(() -> {
                     serverSetupRunning = false;
                     progress.dismiss();

@@ -11,6 +11,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 
 final class ServerTlsSetup {
+    static final int[] FALLBACK_PORTS = {8443};
+
     static final class Result {
         final byte[] pkcs12;
         final String password;
@@ -52,7 +54,10 @@ final class ServerTlsSetup {
             String command = root ? "bash -s" : "sudo -n bash -s";
             ExecResult setup = execute(
                     session, command, installScript(host, sshPort), 240_000);
-            if (setup.exitStatus != 0 || !setup.output.contains("PELmeni_OK=1")) {
+            if (!setup.output.contains("PELmeni_OK=1")) {
+                android.util.Log.e("PelmeniTLS",
+                        "Server installer exit=" + setup.exitStatus
+                                + ", output=" + diagnosticTail(setup.output));
                 throw new Exception(explainSetupError(setup.output));
             }
             String bundle = marker(setup.output, "PELmeni_P12=");
@@ -82,6 +87,57 @@ final class ServerTlsSetup {
         } finally {
             session.disconnect();
         }
+    }
+
+    static void addFallbackPort(SecureStore store, int tlsPort) throws Exception {
+        if (!isAllowedFallback(tlsPort)) throw new Exception("Недопустимый резервный порт.");
+        Session session = connectPlain(store);
+        try {
+            String password = store.getSecret();
+            boolean root = execute(session, "id -u", "", 15_000)
+                    .output.trim().equals("0");
+            if (!root) {
+                ExecResult sudo = execute(
+                        session, "sudo -S -p '' -v", password + "\n", 30_000);
+                if (sudo.exitStatus != 0) {
+                    throw new Exception("Пользователю нужны права sudo с этим же паролем.");
+                }
+            }
+            String command = root ? "bash -s" : "sudo -n bash -s";
+            int sshPort = parsePort(store.getPlain("port", "22"), 22);
+            ExecResult result = execute(session, command,
+                    fallbackScript(tlsPort, sshPort), 60_000);
+            if (!result.output.contains("PELmeni_FALLBACK_OK=1")) {
+                android.util.Log.e("PelmeniTLS",
+                        "Fallback port " + tlsPort + " installer exit="
+                                + result.exitStatus + ", output="
+                                + diagnosticTail(result.output));
+                // A mobile route can disappear just after the remote command has
+                // completed. Keep the port in the failover list: an unavailable
+                // listener is harmless and will be skipped during connection.
+                if (result.exitStatus == -1 && result.output.trim().isEmpty()) return;
+                if (result.output.contains("PELmeni_ERROR=PORT_BUSY")) {
+                    throw new Exception("Порт " + tlsPort + " уже занят.");
+                }
+                throw new Exception("Не удалось запустить TLS на порту " + tlsPort + ".");
+            }
+        } finally {
+            session.disconnect();
+        }
+    }
+
+    private static Session connectPlain(SecureStore store) throws Exception {
+        String host = store.getPlain("host", "").trim();
+        String user = store.getPlain("user", "root").trim();
+        String password = store.getSecret();
+        int sshPort = parsePort(store.getPlain("port", "22"), 22);
+        Session session = new JSch().getSession(user, host, sshPort);
+        session.setPassword(password);
+        session.setSocketFactory(new LowLatencySocketFactory(null));
+        session.setConfig("StrictHostKeyChecking", "no");
+        session.setConfig("PreferredAuthentications", "password,keyboard-interactive");
+        session.connect(15_000);
+        return session;
     }
 
     private static ExecResult execute(
@@ -215,6 +271,52 @@ final class ServerTlsSetup {
                 + "echo 'PELmeni_OK=1'\n";
     }
 
+    private static String fallbackScript(int tlsPort, int sshPort) {
+        return "set -Eeuo pipefail\n"
+                + "if [ ! -f /etc/stunnel/pelmeni.conf ]; then "
+                + "echo 'PELmeni_ERROR=NO_CONFIG'; exit 45; fi\n"
+                + "if ! grep -q '^# PELMENI_PORT_" + tlsPort
+                + "_BEGIN$' /etc/stunnel/pelmeni.conf "
+                + "&& ss -ltnH | awk '{print $4}' | grep -Eq '(^|\\\\]):"
+                + tlsPort + "$|:" + tlsPort + "$'; then\n"
+                + "  echo 'PELmeni_ERROR=PORT_BUSY'; exit 46\n"
+                + "fi\n"
+                + "sed -i '/^# PELMENI_PORT_" + tlsPort
+                + "_BEGIN$/,/^# PELMENI_PORT_" + tlsPort
+                + "_END$/d' /etc/stunnel/pelmeni.conf\n"
+                + "cat >> /etc/stunnel/pelmeni.conf <<'PEL_FALLBACK'\n"
+                + "# PELMENI_PORT_" + tlsPort + "_BEGIN\n"
+                + "[pelmeni-" + tlsPort + "]\n"
+                + "accept = 0.0.0.0:" + tlsPort + "\n"
+                + "connect = 127.0.0.1:" + sshPort + "\n"
+                + "cert = /etc/stunnel/pelmeni/server.crt\n"
+                + "key = /etc/stunnel/pelmeni/server.key\n"
+                + "CAfile = /etc/stunnel/pelmeni/ca.crt\n"
+                + "verify = 2\n"
+                + "sslVersionMin = TLSv1.2\n"
+                + "TIMEOUTclose = 0\n"
+                + "socket = l:TCP_NODELAY=1\n"
+                + "socket = r:TCP_NODELAY=1\n"
+                + "# PELMENI_PORT_" + tlsPort + "_END\n"
+                + "PEL_FALLBACK\n"
+                + "systemctl restart pelmeni-stunnel.service\n"
+                + "sleep 1\n"
+                + "systemctl is-active --quiet pelmeni-stunnel.service "
+                + "|| { echo 'PELmeni_ERROR=SERVICE_FAILED'; exit 47; }\n"
+                + "if command -v ufw >/dev/null && ufw status | grep -q '^Status: active'; then\n"
+                + "  ufw allow " + tlsPort
+                + "/tcp comment 'Pelmeni VPN TLS fallback' >/dev/null || true\n"
+                + "fi\n"
+                + "echo 'PELmeni_FALLBACK_OK=1'\n";
+    }
+
+    private static boolean isAllowedFallback(int port) {
+        for (int allowed : FALLBACK_PORTS) {
+            if (port == allowed) return true;
+        }
+        return false;
+    }
+
     private static String marker(String output, String prefix) {
         for (String line : output.split("\\r?\\n")) {
             if (line.startsWith(prefix)) return line.substring(prefix.length()).trim();
@@ -236,6 +338,13 @@ final class ServerTlsSetup {
             return "Недостаточно прав root/sudo для настройки сервера.";
         }
         return "Не удалось автоматически настроить TLS на сервере.";
+    }
+
+    private static String diagnosticTail(String output) {
+        String safe = output
+                .replaceAll("(?m)^PELmeni_P12=.*$", "PELmeni_P12=[hidden]")
+                .replaceAll("(?m)^PELmeni_PASSWORD=.*$", "PELmeni_PASSWORD=[hidden]");
+        return safe.substring(Math.max(0, safe.length() - 3000));
     }
 
     private static int parsePort(String value, int fallback) {

@@ -55,7 +55,18 @@ final class TlsTransport {
         store.putEncrypted(PASSWORD_KEY, password.getBytes(StandardCharsets.UTF_8));
         store.putPlain("tls_host", host);
         store.putPlain("tls_port", Integer.toString(port));
+        store.putPlain("tls_ports", Integer.toString(port));
         store.putBoolean("tls_enabled", true);
+    }
+
+    static void setAvailablePorts(SecureStore store, List<Integer> ports) {
+        StringBuilder value = new StringBuilder();
+        for (int port : ports) {
+            if (port < 1 || port > 65535) continue;
+            if (value.length() > 0) value.append(',');
+            value.append(port);
+        }
+        if (value.length() > 0) store.putPlain("tls_ports", value.toString());
     }
 
     static void setEnabled(SecureStore store, boolean enabled) {
@@ -100,7 +111,26 @@ final class TlsTransport {
         trust.init(trustStore);
         SSLContext context = SSLContext.getInstance("TLS");
         context.init(keys.getKeyManagers(), trust.getTrustManagers(), null);
-        return new TlsSocketFactory(network, context, port(store));
+        return new TlsSocketFactory(store, network, context, ports(store));
+    }
+
+    private static int[] ports(SecureStore store) {
+        List<Integer> values = new ArrayList<>();
+        int preferred = port(store);
+        values.add(preferred);
+        for (String raw : store.getPlain(
+                "tls_ports", Integer.toString(DEFAULT_PORT)).split(",")) {
+            try {
+                int value = Integer.parseInt(raw.trim());
+                if (value >= 1 && value <= 65535 && !values.contains(value)) {
+                    values.add(value);
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        int[] result = new int[values.size()];
+        for (int i = 0; i < values.size(); i++) result[i] = values.get(i);
+        return result;
     }
 
     private static KeyStore loadKeyStore(byte[] bundle, char[] password) throws Exception {
@@ -116,18 +146,39 @@ final class TlsTransport {
     }
 
     private static final class TlsSocketFactory implements SocketFactory {
+        private final SecureStore store;
         private final Network network;
         private final SSLContext context;
-        private final int tlsPort;
+        private final int[] tlsPorts;
 
-        TlsSocketFactory(Network network, SSLContext context, int tlsPort) {
+        TlsSocketFactory(
+                SecureStore store, Network network, SSLContext context, int[] tlsPorts) {
+            this.store = store;
             this.network = network;
             this.context = context;
-            this.tlsPort = tlsPort;
+            this.tlsPorts = tlsPorts;
         }
 
         @Override public Socket createSocket(String host, int ignoredSshPort)
                 throws IOException {
+            Exception lastError = null;
+            for (int tlsPort : tlsPorts) {
+                try {
+                    Socket socket = connect(host, tlsPort);
+                    store.putPlain("tls_port", Integer.toString(tlsPort));
+                    return socket;
+                } catch (Exception error) {
+                    lastError = error;
+                    android.util.Log.e("PelmeniTLS",
+                            "TLS port " + tlsPort + " failed: "
+                                    + error.getClass().getSimpleName());
+                }
+            }
+            throw new IOException("TLS protection failed on all configured ports",
+                    lastError);
+        }
+
+        private Socket connect(String host, int tlsPort) throws IOException {
             Socket raw = network == null
                     ? new Socket() : network.getSocketFactory().createSocket();
             try {
@@ -137,7 +188,7 @@ final class TlsTransport {
                 InetSocketAddress address = network == null
                         ? new InetSocketAddress(host, tlsPort)
                         : new InetSocketAddress(network.getByName(host), tlsPort);
-                raw.connect(address, 15_000);
+                raw.connect(address, tlsPorts.length > 1 ? 4_000 : 15_000);
 
                 SSLSocket tls = (SSLSocket) context.getSocketFactory()
                         .createSocket(raw, host, tlsPort, true);

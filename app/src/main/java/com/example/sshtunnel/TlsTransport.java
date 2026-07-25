@@ -25,6 +25,7 @@ final class TlsTransport {
     static final int DEFAULT_PORT = 443;
     private static final String BUNDLE_KEY = "tls_pkcs12";
     private static final String PASSWORD_KEY = "tls_pkcs12_password";
+    private static final String USER_DISABLED_KEY = "tls_user_disabled";
 
     static boolean isConfigured(SecureStore store) {
         return store.getEncrypted(BUNDLE_KEY) != null
@@ -36,6 +37,18 @@ final class TlsTransport {
         return store.getBoolean("tls_enabled", false)
                 && isConfigured(store)
                 && host.equalsIgnoreCase(store.getPlain("tls_host", ""));
+    }
+
+    static void enableAutomatically(SecureStore store, String host) {
+        if (isConfigured(store) && !store.contains(USER_DISABLED_KEY)) {
+            store.putBoolean(USER_DISABLED_KEY,
+                    !store.getBoolean("tls_enabled", false));
+        }
+        if (!store.getBoolean(USER_DISABLED_KEY, false)
+                && isConfigured(store)
+                && host.equalsIgnoreCase(store.getPlain("tls_host", ""))) {
+            store.putBoolean("tls_enabled", true);
+        }
     }
 
     static int port(SecureStore store) {
@@ -56,6 +69,7 @@ final class TlsTransport {
         store.putPlain("tls_host", host);
         store.putPlain("tls_port", Integer.toString(port));
         store.putPlain("tls_ports", Integer.toString(port));
+        store.putBoolean(USER_DISABLED_KEY, false);
         store.putBoolean("tls_enabled", true);
     }
 
@@ -73,10 +87,16 @@ final class TlsTransport {
         store.putBoolean("tls_enabled", enabled && isConfigured(store));
     }
 
+    static void setEnabledByUser(SecureStore store, boolean enabled) {
+        store.putBoolean(USER_DISABLED_KEY, !enabled);
+        setEnabled(store, enabled);
+    }
+
     static void clear(SecureStore store) {
         store.removeEncrypted(BUNDLE_KEY);
         store.removeEncrypted(PASSWORD_KEY);
-        store.remove("tls_host", "tls_port", "tls_ports", "tls_enabled");
+        store.remove("tls_host", "tls_port", "tls_ports", "tls_enabled",
+                USER_DISABLED_KEY);
     }
 
     static SocketFactory socketFactory(

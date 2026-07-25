@@ -115,7 +115,10 @@ public class MainActivity extends Activity {
         });
 
         save.setOnClickListener(v -> {
-            if (saveSettings()) Toast.makeText(this, "Настройки сохранены", Toast.LENGTH_SHORT).show();
+            if (saveSettings()) {
+                Toast.makeText(this, "Настройки сохранены", Toast.LENGTH_SHORT).show();
+                maybeOfferTlsForCurrentServer(null);
+            }
         });
         toggle.setOnClickListener(v -> {
             if (running) stopTunnel();
@@ -290,7 +293,7 @@ public class MainActivity extends Activity {
                     (ignored, which) -> confirmServerTlsRemoval());
             builder.setPositiveButton(enabled ? "Выключить" : "Включить",
                     (ignored, which) -> {
-                        TlsTransport.setEnabled(store, !enabled);
+                        TlsTransport.setEnabledByUser(store, !enabled);
                         Toast.makeText(this,
                                 !enabled
                                         ? "TLS-защита включена. Применится при подключении."
@@ -409,7 +412,7 @@ public class MainActivity extends Activity {
                         && configuredHost.equalsIgnoreCase(
                         store.getPlain("tls_host", ""));
                 if (existingCredentials) {
-                    TlsTransport.setEnabled(store, true);
+                    TlsTransport.setEnabledByUser(store, true);
                 } else {
                     ServerTlsSetup.Result result = ServerTlsSetup.install(store);
                     TlsTransport.save(store, configuredHost, result.port,
@@ -723,6 +726,7 @@ public class MainActivity extends Activity {
 
     private void loadSettings() {
         SecureStore store = new SecureStore(this);
+        TlsTransport.enableAutomatically(store, store.getPlain("host", "").trim());
         host.setText(store.getPlain("host", ""));
         sshPort.setText(store.getPlain("port", "22"));
         user.setText(store.getPlain("user", "root"));
@@ -890,6 +894,7 @@ public class MainActivity extends Activity {
             saveAdvancedValues(new SecureStore(this),
                     importedWindow, importedPacket, importedMtu);
             Toast.makeText(this, "Конфигурация импортирована", Toast.LENGTH_SHORT).show();
+            maybeOfferTlsForCurrentServer(null);
         } catch (Exception error) {
             Toast.makeText(this, "Файл конфигурации повреждён или несовместим", Toast.LENGTH_LONG).show();
         }
@@ -1023,6 +1028,11 @@ public class MainActivity extends Activity {
             return;
         }
         if (!saveSettings()) return;
+        if (maybeOfferTlsForCurrentServer(this::continueStartTunnel)) return;
+        continueStartTunnel();
+    }
+
+    private void continueStartTunnel() {
         if (enableVpn.isChecked()) {
             Intent permission = VpnService.prepare(this);
             if (permission != null) {
@@ -1036,6 +1046,39 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent);
         else startService(intent);
         update("Подключение…");
+    }
+
+    private boolean maybeOfferTlsForCurrentServer(Runnable continueWithoutTls) {
+        SecureStore store = new SecureStore(this);
+        String currentHost = host.getText().toString().trim();
+        TlsTransport.enableAutomatically(store, currentHost);
+        boolean configured = TlsTransport.isConfigured(store)
+                && currentHost.equalsIgnoreCase(store.getPlain("tls_host", ""));
+        if (configured || currentHost.isEmpty()
+                || currentHost.equalsIgnoreCase(
+                store.getPlain("tls_offer_shown_host", ""))) {
+            return false;
+        }
+
+        store.putPlain("tls_offer_shown_host", currentHost);
+        AlertDialog.Builder builder = new AlertDialog.Builder(this)
+                .setTitle("Защитить новый сервер?")
+                .setMessage("Для этого сервера в приложении ещё нет пригодной TLS-настройки. "
+                        + "TLS маскирует SSH под защищённое HTTPS-соединение и может снизить "
+                        + "вероятность автоматического обнаружения и блокировки IP.\n\n"
+                        + "Приложение переиспользует Pelmeni TLS, если он уже установлен, "
+                        + "либо автоматически настроит Debian/Ubuntu. "
+                        + "Это не гарантирует защиту от прямой блокировки IP.")
+                .setPositiveButton("Включить TLS",
+                        (ignored, which) -> confirmServerTlsSetup());
+        if (continueWithoutTls == null) {
+            builder.setNegativeButton("Позже", null);
+        } else {
+            builder.setNegativeButton("Подключиться без TLS",
+                    (ignored, which) -> continueWithoutTls.run());
+        }
+        builder.show();
+        return true;
     }
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {

@@ -21,6 +21,7 @@ public final class SecureStore {
     public String getPlain(String k, String d) { return prefs.getString(k, d); }
     public void putBoolean(String k, boolean v) { prefs.edit().putBoolean(k, v).apply(); }
     public boolean getBoolean(String k, boolean d) { return prefs.getBoolean(k, d); }
+    public boolean contains(String k) { return prefs.contains(k); }
     public void putLong(String k, long v) { prefs.edit().putLong(k, v).apply(); }
     public long getLong(String k, long d) { return prefs.getLong(k, d); }
     public void remove(String... keys) {

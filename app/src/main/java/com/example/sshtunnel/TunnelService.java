@@ -218,6 +218,7 @@ public class TunnelService extends Service {
         int vpnPort = TunnelMode.vpnSocksPort(store);
         int windowSize = NetworkTuning.windowKiB(store) * 1024;
         int packetSize = NetworkTuning.packetKiB(store) * 1024;
+        TlsTransport.enableAutomatically(store, host);
         boolean tlsProtected = TlsTransport.isEnabledFor(store, host);
 
         if (host.isEmpty() || user.isEmpty() || password.isEmpty()) {

@@ -196,8 +196,8 @@ public class MainActivity extends Activity {
                 NetworkTuning.packetKiB(store));
         EditText mtu = addTuningField(fields,
                 "MTU VPN · 1280–16000",
-                "Размер пакета виртуального TUN. 8500 быстрее для tun2socks; 1500 полезно, "
-                        + "если отдельные сайты или тесты зависают.",
+                "Размер пакета виртуального TUN. 1400 стабильно работает на мобильных сетях; "
+                        + "слишком большие значения могут резко снизить выгрузку.",
                 NetworkTuning.vpnMtu(store));
         Button autoTune = new Button(this);
         autoTune.setText("АВТОПОДБОР · ЭКСПЕРИМЕНТ");
@@ -206,7 +206,7 @@ public class MainActivity extends Activity {
 
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle("Тонкая настройка · для опытных")
-                .setMessage("Рекомендуется: окно 1024 КиБ, пакет 32 КиБ, MTU 8500. "
+                .setMessage("Рекомендуется: окно 1024 КиБ, пакет 32 КиБ, MTU 1400. "
                         + "Все изменения применяются при следующем подключении.")
                 .setView(scroll)
                 .setPositiveButton("Сохранить", null)

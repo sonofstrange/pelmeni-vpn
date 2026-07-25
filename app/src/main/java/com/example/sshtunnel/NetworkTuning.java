@@ -3,7 +3,7 @@ package com.example.sshtunnel;
 final class NetworkTuning {
     static final int DEFAULT_WINDOW_KIB = 1024;
     static final int DEFAULT_PACKET_KIB = 32;
-    static final int DEFAULT_MTU = 8500;
+    static final int DEFAULT_MTU = 1400;
 
     static final int MIN_WINDOW_KIB = 128;
     static final int MAX_WINDOW_KIB = 16384;
@@ -23,6 +23,12 @@ final class NetworkTuning {
     }
 
     static int vpnMtu(SecureStore store) {
+        if (!store.getBoolean("mtu_1400_migrated", false)) {
+            if ("8500".equals(store.getPlain("vpn_mtu", "8500"))) {
+                store.putPlain("vpn_mtu", Integer.toString(DEFAULT_MTU));
+            }
+            store.putBoolean("mtu_1400_migrated", true);
+        }
         return read(store, "vpn_mtu", DEFAULT_MTU, MIN_MTU, MAX_MTU);
     }
 

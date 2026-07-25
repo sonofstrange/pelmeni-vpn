@@ -43,6 +43,7 @@ public class MainActivity extends Activity {
     private static final int REQUEST_VPN = 9;
     private static final int REQUEST_EXPORT = 20;
     private static final int REQUEST_IMPORT = 21;
+    private static final long UPDATE_INTERVAL_MS = 24 * 60 * 60 * 1000L;
 
     private EditText host, sshPort, user, password, socksPort;
     private TextView appTitle, status, speedPing, debugInfo;
@@ -52,6 +53,8 @@ public class MainActivity extends Activity {
     private boolean running;
     private boolean receiverRegistered;
     private volatile boolean speedTestRunning;
+    private volatile boolean serverSetupRunning;
+    private volatile boolean updateCheckRunning;
     private final ExecutorService speedWorker = Executors.newSingleThreadExecutor();
 
     private final BroadcastReceiver receiver = new BroadcastReceiver() {
@@ -123,6 +126,7 @@ public class MainActivity extends Activity {
                 if (!running) startTunnel();
             });
         }
+        maybeCheckForUpdate(false);
     }
 
     private void showMoreActions(android.view.View anchor) {
@@ -131,6 +135,7 @@ public class MainActivity extends Activity {
         popup.getMenu().findItem(R.id.actionImport).setEnabled(!running);
         popup.getMenu().findItem(R.id.actionExport).setEnabled(!running);
         popup.getMenu().findItem(R.id.actionSpeedTest).setEnabled(TunnelService.isConnected());
+        popup.getMenu().findItem(R.id.actionProtection).setEnabled(!running);
         popup.setOnMenuItemClickListener(item -> {
             if (item.getItemId() == R.id.actionImport) {
                 beginImport();
@@ -146,6 +151,14 @@ public class MainActivity extends Activity {
             }
             if (item.getItemId() == R.id.actionSpeedTest) {
                 confirmSpeedTest();
+                return true;
+            }
+            if (item.getItemId() == R.id.actionProtection) {
+                showTlsProtection();
+                return true;
+            }
+            if (item.getItemId() == R.id.actionUpdate) {
+                maybeCheckForUpdate(true);
                 return true;
             }
             if (item.getItemId() == R.id.actionAdvanced) {
@@ -250,6 +263,196 @@ public class MainActivity extends Activity {
         field.setSelectAllOnFocus(true);
         parent.addView(field);
         return field;
+    }
+
+    private void showTlsProtection() {
+        SecureStore store = new SecureStore(this);
+        String currentHost = host.getText().toString().trim();
+        boolean configured = TlsTransport.isConfigured(store)
+                && currentHost.equalsIgnoreCase(store.getPlain("tls_host", ""));
+        boolean enabled = configured && store.getBoolean("tls_enabled", false);
+        String message = "Обычный SSH уже шифрует данные. Этот режим дополнительно "
+                + "оборачивает SSH в TLS на порту 443 и требует клиентский сертификат, "
+                + "чтобы скрыть SSH от простого распознавания и сканирования."
+                + "\n\nЭто не защищает от прямой блокировки IP сервера."
+                + "\n\nСостояние: "
+                + (configured
+                ? (enabled ? "включено" : "настроено, но выключено")
+                : "не настроено для текущего сервера");
+        AlertDialog.Builder builder = new AlertDialog.Builder(this)
+                .setTitle("Защита соединения · эксперимент")
+                .setMessage(message)
+                .setNegativeButton("Закрыть", null);
+        if (configured) {
+            builder.setPositiveButton(enabled ? "Выключить" : "Включить",
+                    (ignored, which) -> {
+                        TlsTransport.setEnabled(store, !enabled);
+                        Toast.makeText(this,
+                                !enabled
+                                        ? "TLS-защита включена. Применится при подключении."
+                                        : "TLS-защита выключена. Серверная настройка сохранена.",
+                                Toast.LENGTH_LONG).show();
+                    });
+            builder.setNeutralButton("Настроить заново",
+                    (ignored, which) -> confirmServerTlsSetup());
+        } else {
+            builder.setPositiveButton("Настроить сервер",
+                    (ignored, which) -> confirmServerTlsSetup());
+        }
+        builder.show();
+    }
+
+    private void confirmServerTlsSetup() {
+        if (running) {
+            Toast.makeText(this, "Сначала отключи туннель", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (serverSetupRunning) {
+            Toast.makeText(this, "Настройка сервера уже выполняется", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!saveSettings()) return;
+        new AlertDialog.Builder(this)
+                .setTitle("Автоматически настроить сервер?")
+                .setMessage("Приложение подключится по обычному SSH, проверит Debian/Ubuntu "
+                        + "и свободный порт 443, установит stunnel, создаст отдельный systemd-сервис "
+                        + "и взаимные TLS-сертификаты.\n\n"
+                        + "Нужен root либо sudo с тем же паролем. Если порт 443 занят, "
+                        + "приложение остановится и ничего не перезапишет.")
+                .setPositiveButton("Настроить", (ignored, which) -> runServerTlsSetup())
+                .setNegativeButton("Отмена", null)
+                .show();
+    }
+
+    private void runServerTlsSetup() {
+        serverSetupRunning = true;
+        AlertDialog progress = new AlertDialog.Builder(this)
+                .setTitle("Настройка TLS-защиты")
+                .setMessage("Проверяем сервер, устанавливаем stunnel и создаём сертификаты. "
+                        + "Обычно это занимает 20–90 секунд…")
+                .setCancelable(false)
+                .create();
+        progress.show();
+        speedWorker.execute(() -> {
+            try {
+                SecureStore store = new SecureStore(this);
+                ServerTlsSetup.Result result = ServerTlsSetup.install(store);
+                String configuredHost = store.getPlain("host", "").trim();
+                TlsTransport.save(store, configuredHost, result.port,
+                        result.pkcs12, result.password);
+                try {
+                    ServerTlsSetup.verify(store);
+                } catch (Exception verifyError) {
+                    TlsTransport.setEnabled(store, false);
+                    throw new Exception("Сервер настроен, но проверка TLS-подключения не прошла. "
+                            + "Проверь внешний firewall для TCP-порта 443.");
+                }
+                runOnUiThread(() -> {
+                    serverSetupRunning = false;
+                    progress.dismiss();
+                    if (isFinishing() || isDestroyed()) return;
+                    new AlertDialog.Builder(this)
+                            .setTitle("TLS-защита готова")
+                            .setMessage("Порт 443 доступен, клиентский сертификат сохранён "
+                                    + "в зашифрованном хранилище Android, защищённое SSH-подключение "
+                                    + "успешно проверено.\n\nРежим включён и применится при подключении.")
+                            .setPositiveButton("Готово", null)
+                            .show();
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    serverSetupRunning = false;
+                    progress.dismiss();
+                    if (isFinishing() || isDestroyed()) return;
+                    String rawMessage = error.getMessage();
+                    final String message =
+                            rawMessage == null || rawMessage.trim().isEmpty()
+                                    ? "Не удалось настроить TLS-защиту."
+                                    : rawMessage;
+                    new AlertDialog.Builder(this)
+                            .setTitle("Настройка не завершена")
+                            .setMessage(message)
+                            .setPositiveButton("Понятно", null)
+                            .show();
+                });
+            }
+        });
+    }
+
+    private void maybeCheckForUpdate(boolean manual) {
+        if (updateCheckRunning) {
+            if (manual) {
+                Toast.makeText(this, "Проверка обновления уже выполняется",
+                        Toast.LENGTH_SHORT).show();
+            }
+            return;
+        }
+        SecureStore store = new SecureStore(this);
+        long now = System.currentTimeMillis();
+        if (!manual && now - store.getLong("last_update_check", 0)
+                < UPDATE_INTERVAL_MS) {
+            return;
+        }
+        store.putLong("last_update_check", now);
+        updateCheckRunning = true;
+        if (manual) {
+            Toast.makeText(this, "Проверяем GitHub Releases…", Toast.LENGTH_SHORT).show();
+        }
+        speedWorker.execute(() -> {
+            try {
+                UpdateChecker.Result result =
+                        UpdateChecker.check(new SecureStore(this));
+                runOnUiThread(() -> {
+                    updateCheckRunning = false;
+                    if (isFinishing() || isDestroyed()) return;
+                    if (result == null) {
+                        if (manual) {
+                            Toast.makeText(this,
+                                    "Установлена последняя версия " + BuildConfig.VERSION_NAME,
+                                    Toast.LENGTH_LONG).show();
+                        }
+                        return;
+                    }
+                    showUpdate(result);
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    updateCheckRunning = false;
+                    if (!manual || isFinishing() || isDestroyed()) return;
+                    new AlertDialog.Builder(this)
+                            .setTitle("Не удалось проверить обновление")
+                            .setMessage("Проверь доступ к GitHub и повтори позже.")
+                            .setPositiveButton("Готово", null)
+                            .show();
+                });
+            }
+        });
+    }
+
+    private void showUpdate(UpdateChecker.Result result) {
+        String notes = result.notes.isEmpty()
+                ? "Описание изменений не добавлено."
+                : result.notes.substring(0, Math.min(result.notes.length(), 2000));
+        String size = result.size > 0 ? "\nРазмер APK: " + formatBytes(result.size) : "";
+        new AlertDialog.Builder(this)
+                .setTitle("Доступно обновление " + result.version)
+                .setMessage("Установлена версия " + BuildConfig.VERSION_NAME + size
+                        + "\n\n" + notes
+                        + "\n\nAndroid попросит подтвердить установку обновления.")
+                .setPositiveButton("Скачать APK", (ignored, which) -> {
+                    try {
+                        startActivity(new Intent(Intent.ACTION_VIEW,
+                                Uri.parse(result.downloadUrl)));
+                    } catch (Exception error) {
+                        startActivity(new Intent(Intent.ACTION_VIEW,
+                                Uri.parse(result.pageUrl)));
+                    }
+                })
+                .setNeutralButton("Страница релиза", (ignored, which) ->
+                        startActivity(new Intent(Intent.ACTION_VIEW,
+                                Uri.parse(result.pageUrl))))
+                .setNegativeButton("Позже", null)
+                .show();
     }
 
     private void confirmSpeedTest() {

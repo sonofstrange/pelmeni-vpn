@@ -5,7 +5,10 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Proxy;
 import java.net.URL;
+import java.security.SecureRandom;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 
 import javax.net.ssl.HttpsURLConnection;
 
@@ -32,7 +35,7 @@ final class TunnelSpeedTest {
         };
         Arrays.sort(latency);
         long download = measureDownload(socksPort, downloadBytes);
-        long upload = uploadBytes > 0 ? measureUpload(socksPort, uploadBytes) : -1;
+        long upload = uploadBytes > 0 ? measureUploadSeries(socksPort, uploadBytes) : -1;
         return new Result(latency[1], download, upload);
     }
 
@@ -65,7 +68,26 @@ final class TunnelSpeedTest {
         return rate(received, System.nanoTime() - started);
     }
 
-    private static long measureUpload(int socksPort, int bytes) throws Exception {
+    private static long measureUploadSeries(int socksPort, int totalBytes) throws Exception {
+        int first = Math.max(64 * 1024, totalBytes / 12);
+        int second = Math.max(64 * 1024, totalBytes / 4);
+        int third = Math.max(64 * 1024, totalBytes - first - second);
+        int[] sizes = {first, second, third};
+        List<Long> stableRates = new ArrayList<>();
+        List<Long> allRates = new ArrayList<>();
+        for (int size : sizes) {
+            UploadSample sample = measureUpload(socksPort, size);
+            allRates.add(sample.bytesPerSecond);
+            if (sample.elapsedNanos >= 250_000_000L) {
+                stableRates.add(sample.bytesPerSecond);
+            }
+        }
+        List<Long> selected = stableRates.isEmpty() ? allRates : stableRates;
+        selected.sort(Long::compareTo);
+        return selected.get(selected.size() / 2);
+    }
+
+    private static UploadSample measureUpload(int socksPort, int bytes) throws Exception {
         HttpsURLConnection connection = open(
                 "https://speed.cloudflare.com/__up?r=" + System.nanoTime(), socksPort);
         connection.setRequestMethod("POST");
@@ -73,6 +95,7 @@ final class TunnelSpeedTest {
         connection.setFixedLengthStreamingMode(bytes);
         connection.setRequestProperty("Content-Type", "application/octet-stream");
         byte[] buffer = new byte[64 * 1024];
+        new SecureRandom().nextBytes(buffer);
         int remaining = bytes;
         long started = System.nanoTime();
         try (OutputStream output = connection.getOutputStream()) {
@@ -83,15 +106,20 @@ final class TunnelSpeedTest {
             }
             output.flush();
         }
-        long elapsed = System.nanoTime() - started;
+        int responseCode = connection.getResponseCode();
+        if (responseCode < 200 || responseCode >= 300) {
+            connection.disconnect();
+            throw new Exception("Upload server returned HTTP " + responseCode);
+        }
         try (InputStream input = connection.getInputStream()) {
             while (input.read(buffer) != -1) {
-                // Drain the response so keep-alive and server-side errors are handled correctly.
+                // The response proves that the server received the full request body.
             }
         } finally {
             connection.disconnect();
         }
-        return rate(bytes, elapsed);
+        long elapsed = System.nanoTime() - started;
+        return new UploadSample(rate(bytes, elapsed), elapsed);
     }
 
     private static HttpsURLConnection open(String address, int socksPort) throws Exception {
@@ -109,6 +137,16 @@ final class TunnelSpeedTest {
 
     private static long rate(long bytes, long nanoseconds) {
         return nanoseconds <= 0 ? 0 : bytes * 1_000_000_000L / nanoseconds;
+    }
+
+    private static final class UploadSample {
+        final long bytesPerSecond;
+        final long elapsedNanos;
+
+        UploadSample(long bytesPerSecond, long elapsedNanos) {
+            this.bytesPerSecond = bytesPerSecond;
+            this.elapsedNanos = elapsedNanos;
+        }
     }
 
     private TunnelSpeedTest() {

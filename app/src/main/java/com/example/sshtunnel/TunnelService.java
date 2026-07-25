@@ -218,16 +218,20 @@ public class TunnelService extends Service {
         int vpnPort = TunnelMode.vpnSocksPort(store);
         int windowSize = NetworkTuning.windowKiB(store) * 1024;
         int packetSize = NetworkTuning.packetKiB(store) * 1024;
+        boolean tlsProtected = TlsTransport.isEnabledFor(store, host);
 
         if (host.isEmpty() || user.isEmpty() || password.isEmpty()) {
             throw new JSchException("missing settings");
         }
 
-        send("Подключение к " + host + "…");
+        send("Подключение к " + host
+                + (tlsProtected ? " через защищённый TLS…" : "…"));
         JSch jsch = new JSch();
         Session newSession = jsch.getSession(user, host, sshPort);
         newSession.setPassword(password);
-        newSession.setSocketFactory(new LowLatencySocketFactory(activeUnderlyingNetwork));
+        newSession.setSocketFactory(tlsProtected
+                ? TlsTransport.socketFactory(store, activeUnderlyingNetwork)
+                : new LowLatencySocketFactory(activeUnderlyingNetwork));
         newSession.setConfig("StrictHostKeyChecking", "no");
         newSession.setConfig("PreferredAuthentications", "password,keyboard-interactive");
         newSession.setConfig("cipher.c2s",
@@ -362,6 +366,9 @@ public class TunnelService extends Service {
         if (m.contains("connection refused")) return "SSH-порт недоступен.";
         if (m.contains("missing settings")) return "Заполни настройки подключения.";
         if (m.contains("address already in use")) return "Локальный SOCKS-порт уже занят.";
+        if (m.contains("tls protection")) {
+            return "Не удалось установить защищённое TLS-соединение.";
+        }
         return "Не удалось подключиться.";
     }
 

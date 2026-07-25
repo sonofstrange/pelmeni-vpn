@@ -13,6 +13,12 @@
         android:id="@+id/actionSpeedTest"
         android:title="Проверка скорости" />
     <item
+        android:id="@+id/actionProtection"
+        android:title="Защита соединения · TLS" />
+    <item
+        android:id="@+id/actionUpdate"
+        android:title="Проверить обновление" />
+    <item
         android:id="@+id/actionAdvanced"
         android:title="Тонкая настройка" />
     <item

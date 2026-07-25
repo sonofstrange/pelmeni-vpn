@@ -47,12 +47,15 @@ public class MainActivity extends Activity {
     private static final int REQUEST_VPN = 9;
     private static final int REQUEST_EXPORT = 20;
     private static final int REQUEST_IMPORT = 21;
+    private static final int REQUEST_SPLIT_EXPORT = 22;
+    private static final int REQUEST_SPLIT_IMPORT = 23;
     private static final long UPDATE_INTERVAL_MS = 24 * 60 * 60 * 1000L;
 
     private EditText host, sshPort, user, password, socksPort;
     private TextView appTitle, status, speedPing, debugInfo, serverName, serverAddress;
+    private TextView splitTunnelSummary;
     private TextView sessionDown, sessionUp, totalDown, totalUp;
-    private Button toggle, save, serverSelect, serverEdit;
+    private Button toggle, save, serverSelect, serverEdit, splitTunnelButton;
     private CheckBox showPassword, autoReconnect, startOnBoot, enableVpn, enableTelegram;
     private ScrollView mainScroll;
     private FrameLayout contentContainer;
@@ -91,10 +94,12 @@ public class MainActivity extends Activity {
         totalUp = findViewById(R.id.totalUp);
         serverName = findViewById(R.id.serverName);
         serverAddress = findViewById(R.id.serverAddress);
+        splitTunnelSummary = findViewById(R.id.splitTunnelSummary);
         toggle = findViewById(R.id.toggle);
         save = findViewById(R.id.save);
         serverSelect = findViewById(R.id.serverSelect);
         serverEdit = findViewById(R.id.serverEdit);
+        splitTunnelButton = findViewById(R.id.splitTunnelButton);
         showPassword = findViewById(R.id.showPassword);
         autoReconnect = findViewById(R.id.autoReconnect);
         startOnBoot = findViewById(R.id.startOnBoot);
@@ -108,6 +113,7 @@ public class MainActivity extends Activity {
         navAdd = findViewById(R.id.navAdd);
 
         ServerProfiles.migrateLegacy(new SecureStore(this));
+        SplitTunnel.ensureDefaults(new SecureStore(this));
         Branding.restoreLauncherState(this);
         appTitle.setText(Branding.appName(this));
         updateDebugPanel();
@@ -156,6 +162,7 @@ public class MainActivity extends Activity {
             showServerEditor(active);
         });
         findViewById(R.id.serverProfileCard).setOnClickListener(v -> showServerList());
+        splitTunnelButton.setOnClickListener(v -> showSplitTunnelPage());
         navHome.setOnClickListener(v -> showHomePage());
         navPeople.setOnClickListener(v -> showPeopleWip());
         navSettings.setOnClickListener(v -> showSettingsHub());
@@ -417,6 +424,296 @@ public class MainActivity extends Activity {
         card.setFocusable(true);
         card.setOnClickListener(v -> action.run());
         page.addView(card, pageCardParams());
+    }
+
+    private void showSplitTunnelPage() {
+        SecureStore store = new SecureStore(this);
+        SplitTunnel.ensureDefaults(store);
+        SplitTunnel.Profile active = SplitTunnel.active(store);
+        LinearLayout page = createPageContent("Раздельное туннелирование",
+                "Маршруты применяются только к VPN для всего телефона. Домены заново "
+                        + "преобразуются в IP при каждом подключении.");
+
+        addToggleCard(page, "Использовать раздельные маршруты",
+                "Если выключено, весь трафик работает как раньше и идёт через VPN.",
+                SplitTunnel.enabled(store), checked -> {
+                    SplitTunnel.setEnabled(store, checked);
+                    updateSplitSummary();
+                    Toast.makeText(this, running
+                                    ? "Изменение применится при следующем подключении"
+                                    : "Настройка сохранена",
+                            Toast.LENGTH_SHORT).show();
+                });
+
+        if (active != null) {
+            LinearLayout current = createCard();
+            TextView name = new TextView(this);
+            name.setText(active.name);
+            name.setTextColor(0xFFFFAA5B);
+            name.setTextSize(21);
+            name.setTypeface(null, android.graphics.Typeface.BOLD);
+            current.addView(name);
+            addCardSubtitle(current,
+                    (SplitTunnel.MODE_ONLY.equals(active.mode)
+                            ? "Через VPN только адреса из списка"
+                            : "Через VPN всё, кроме адресов из списка")
+                            + " · " + active.entries.size() + " записей");
+            page.addView(current, pageCardParams());
+        }
+
+        addSectionTitle(page, "Наборы адресов");
+        for (SplitTunnel.Profile profile : SplitTunnel.list(store)) {
+            boolean selected = active != null && active.id.equals(profile.id);
+            LinearLayout row = new LinearLayout(this);
+            row.setGravity(android.view.Gravity.CENTER_VERTICAL);
+            row.setPadding(dp(4), dp(10), 0, dp(10));
+            row.setClickable(true);
+            row.setFocusable(true);
+            row.setOnClickListener(v -> {
+                SplitTunnel.activate(store, profile.id);
+                updateSplitSummary();
+                showSplitTunnelPage();
+            });
+
+            TextView marker = new TextView(this);
+            marker.setText(selected ? "●" : "○");
+            marker.setTextColor(selected ? 0xFFFFAA5B : 0xFF7D828D);
+            marker.setTextSize(27);
+            marker.setGravity(android.view.Gravity.CENTER);
+            row.addView(marker, new LinearLayout.LayoutParams(dp(52), dp(58)));
+
+            LinearLayout labels = new LinearLayout(this);
+            labels.setOrientation(LinearLayout.VERTICAL);
+            labels.setLayoutParams(new LinearLayout.LayoutParams(
+                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+            TextView title = new TextView(this);
+            title.setText(profile.name);
+            title.setTextColor(selected ? 0xFFFFAA5B : 0xFFF1F2F4);
+            title.setTextSize(17);
+            title.setSingleLine(true);
+            labels.addView(title);
+            TextView subtitle = new TextView(this);
+            subtitle.setText((SplitTunnel.MODE_ONLY.equals(profile.mode)
+                    ? "Только через VPN" : "Исключить из VPN")
+                    + " · " + profile.entries.size() + " записей");
+            subtitle.setTextColor(0xFF9297A2);
+            subtitle.setTextSize(13);
+            labels.addView(subtitle);
+            row.addView(labels);
+
+            TextView edit = new TextView(this);
+            edit.setText("⚙");
+            edit.setTextColor(0xFFF1F2F4);
+            edit.setTextSize(23);
+            edit.setGravity(android.view.Gravity.CENTER);
+            edit.setClickable(true);
+            edit.setFocusable(true);
+            edit.setOnClickListener(v -> showSplitProfileEditor(profile));
+            row.addView(edit, new LinearLayout.LayoutParams(dp(60), dp(58)));
+            page.addView(row);
+
+            View divider = new View(this);
+            divider.setBackgroundColor(0xFF2A2C31);
+            LinearLayout.LayoutParams dividerParams = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, dp(1));
+            dividerParams.leftMargin = dp(52);
+            page.addView(divider, dividerParams);
+        }
+
+        addPageAction(page, "Создать новый набор",
+                "Свой режим и список доменов, IP или CIDR",
+                () -> showSplitProfileEditor(null));
+        addSectionTitle(page, "Перенос списков");
+        addPageAction(page, "Импортировать набор",
+                "Файл Pelmeni Split Tunnel в формате JSON", this::beginSplitImport);
+        addPageAction(page, "Экспортировать активный набор",
+                "Сохранить список и режим в отдельный файл", this::beginSplitExport);
+
+        TextView note = new TextView(this);
+        note.setText("Важно: набор «Искл. российские сервисы» — стартовый и редактируемый. "
+                + "Сервисы используют CDN и меняют адреса, поэтому он не может быть "
+                + "абсолютно полным. Переподключение обновляет IP доменов.");
+        note.setTextColor(0xFF7F8490);
+        note.setTextSize(12);
+        note.setPadding(0, dp(18), 0, 0);
+        page.addView(note);
+        showScrollablePage(page, navHome);
+    }
+
+    private void showSplitProfileEditor(SplitTunnel.Profile profile) {
+        SecureStore store = new SecureStore(this);
+        LinearLayout page = createPageContent(
+                profile == null ? "Новый набор" : profile.name,
+                "Одна строка — домен, IPv4 или сеть CIDR. Примеры: youtube.com, "
+                        + "142.250.0.0/16, 1.1.1.1.");
+        addSectionTitle(page, "Название");
+        EditText name = addServerField(page, "Название набора",
+                profile == null ? "" : profile.name,
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+
+        addSectionTitle(page, "Режим");
+        LinearLayout modeCard = createCard();
+        RadioGroup modes = new RadioGroup(this);
+        modes.setOrientation(RadioGroup.VERTICAL);
+        RadioButton bypass = createRadio("Не направлять список через VPN",
+                "Остальной интернет идёт через VPN");
+        RadioButton only = createRadio("Направлять через VPN только список",
+                "Остальной интернет идёт напрямую");
+        modes.addView(bypass);
+        modes.addView(only);
+        if (profile != null && SplitTunnel.MODE_ONLY.equals(profile.mode)) {
+            only.setChecked(true);
+        } else {
+            bypass.setChecked(true);
+        }
+        modeCard.addView(modes);
+        page.addView(modeCard, pageCardParams());
+
+        addSectionTitle(page, "Домены и IP");
+        LinearLayout entriesCard = createCard();
+        EditText entries = new EditText(this);
+        entries.setHint("example.com\n1.1.1.1\n10.0.0.0/8");
+        entries.setHintTextColor(0xFF676C76);
+        entries.setTextColor(0xFFF3F4F6);
+        entries.setTextSize(15);
+        entries.setGravity(android.view.Gravity.TOP);
+        entries.setMinLines(10);
+        entries.setInputType(InputType.TYPE_CLASS_TEXT
+                | InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        entries.setBackgroundColor(android.graphics.Color.TRANSPARENT);
+        if (profile != null) {
+            StringBuilder text = new StringBuilder();
+            for (String entry : profile.entries) {
+                if (text.length() > 0) text.append('\n');
+                text.append(entry);
+            }
+            entries.setText(text.toString());
+        }
+        entriesCard.addView(entries);
+        page.addView(entriesCard, pageCardParams());
+
+        Button saveProfile = new Button(this);
+        saveProfile.setText("СОХРАНИТЬ НАБОР");
+        LinearLayout.LayoutParams saveParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(58));
+        saveParams.topMargin = dp(22);
+        page.addView(saveProfile, saveParams);
+        saveProfile.setOnClickListener(v -> {
+            List<String> values = SplitTunnel.parseLines(entries.getText().toString());
+            if (values.isEmpty()) {
+                Toast.makeText(this, "Добавь хотя бы один домен или IP",
+                        Toast.LENGTH_SHORT).show();
+                return;
+            }
+            String selectedMode = modes.getCheckedRadioButtonId() == only.getId()
+                    ? SplitTunnel.MODE_ONLY : SplitTunnel.MODE_BYPASS;
+            SplitTunnel.Profile updated = profile == null
+                    ? SplitTunnel.create(name.getText().toString(), selectedMode, values)
+                    : new SplitTunnel.Profile(profile.id, name.getText().toString().trim(),
+                    selectedMode, values, profile.builtIn);
+            SplitTunnel.saveAndActivate(store, updated);
+            updateSplitSummary();
+            showSplitTunnelPage();
+            Toast.makeText(this, "Набор сохранён", Toast.LENGTH_SHORT).show();
+        });
+
+        if (profile != null && SplitTunnel.list(store).size() > 1) {
+            Button delete = new Button(this);
+            delete.setText("УДАЛИТЬ НАБОР");
+            delete.setTextColor(0xFFFF7272);
+            page.addView(delete);
+            delete.setOnClickListener(v -> new AlertDialog.Builder(this)
+                    .setTitle("Удалить набор «" + profile.name + "»?")
+                    .setPositiveButton("Удалить", (ignored, which) -> {
+                        SplitTunnel.delete(store, profile.id);
+                        updateSplitSummary();
+                        showSplitTunnelPage();
+                    })
+                    .setNegativeButton("Отмена", null)
+                    .show());
+        }
+        showScrollablePage(page, navHome);
+    }
+
+    private void updateSplitSummary() {
+        SecureStore store = new SecureStore(this);
+        SplitTunnel.Profile active = SplitTunnel.active(store);
+        if (!SplitTunnel.enabled(store)) {
+            splitTunnelSummary.setText("Выключено · весь трафик через VPN");
+            return;
+        }
+        if (active == null) {
+            splitTunnelSummary.setText("Включено · набор не выбран");
+            return;
+        }
+        splitTunnelSummary.setText(
+                (SplitTunnel.MODE_ONLY.equals(active.mode)
+                        ? "Только через VPN: " : "Не через VPN: ")
+                        + active.name + " · " + active.entries.size());
+    }
+
+    private void beginSplitExport() {
+        SplitTunnel.Profile profile = SplitTunnel.active(new SecureStore(this));
+        if (profile == null) {
+            Toast.makeText(this, "Сначала создай набор", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT)
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("application/json")
+                .putExtra(Intent.EXTRA_TITLE, profile.name + ".pelmeni-split.json");
+        startActivityForResult(intent, REQUEST_SPLIT_EXPORT);
+    }
+
+    private void beginSplitImport() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT)
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("*/*");
+        startActivityForResult(intent, REQUEST_SPLIT_IMPORT);
+    }
+
+    private void writeSplitConfig(Uri uri) {
+        if (uri == null) return;
+        try (OutputStream output = getContentResolver().openOutputStream(uri, "wt")) {
+            SplitTunnel.Profile profile = SplitTunnel.active(new SecureStore(this));
+            if (output == null || profile == null) throw new Exception("No active profile");
+            output.write(SplitTunnel.exportJson(profile).getBytes(StandardCharsets.UTF_8));
+            Toast.makeText(this, "Набор экспортирован", Toast.LENGTH_SHORT).show();
+        } catch (Exception error) {
+            Toast.makeText(this, "Не удалось экспортировать набор",
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void readSplitConfig(Uri uri) {
+        if (uri == null) return;
+        try (InputStream input = getContentResolver().openInputStream(uri)) {
+            if (input == null) throw new Exception("No input stream");
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            byte[] buffer = new byte[4096];
+            for (int count; (count = input.read(buffer)) != -1;) {
+                if (bytes.size() + count > 128 * 1024) throw new Exception("Too large");
+                bytes.write(buffer, 0, count);
+            }
+            String text = bytes.toString(StandardCharsets.UTF_8.name()).trim();
+            SplitTunnel.Profile profile;
+            if (text.startsWith("{")) {
+                profile = SplitTunnel.importJson(text);
+            } else {
+                List<String> entries = SplitTunnel.parseLines(text);
+                if (entries.isEmpty()) throw new Exception("Empty list");
+                profile = SplitTunnel.create(
+                        "Импортированный список", SplitTunnel.MODE_BYPASS, entries);
+            }
+            SplitTunnel.saveAndActivate(new SecureStore(this), profile);
+            updateSplitSummary();
+            showSplitTunnelPage();
+            Toast.makeText(this, "Набор импортирован", Toast.LENGTH_SHORT).show();
+        } catch (Exception error) {
+            Toast.makeText(this, "Файл набора повреждён или несовместим",
+                    Toast.LENGTH_LONG).show();
+        }
     }
 
     private int dp(int value) {
@@ -902,6 +1199,7 @@ public class MainActivity extends Activity {
         boolean vpnEnabled = store.getBoolean("vpn_mode", false);
         enableVpn.setChecked(vpnEnabled);
         enableTelegram.setChecked(store.getBoolean("telegram_proxy", !vpnEnabled));
+        updateSplitSummary();
         updateServerCard();
     }
 
@@ -1010,27 +1308,12 @@ public class MainActivity extends Activity {
             page.addView(currentAddress);
         }
 
-        TextView protocol = new TextView(this);
-        protocol.setText("SSH + SOCKS5  ⌄");
-        protocol.setTextColor(0xFF17181B);
-        protocol.setTextSize(16);
-        protocol.setGravity(android.view.Gravity.CENTER);
-        protocol.setTypeface(null, android.graphics.Typeface.BOLD);
-        protocol.setBackgroundResource(R.drawable.server_protocol_background);
-        protocol.setClickable(true);
-        protocol.setFocusable(true);
-        protocol.setOnClickListener(v -> Toast.makeText(this,
-                "Сейчас доступен один протокол: SSH + SOCKS5",
-                Toast.LENGTH_SHORT).show());
-        page.addView(protocol, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(54)));
-
         TextView heading = new TextView(this);
         heading.setText("Серверы");
         heading.setTextColor(0xFFF3F4F6);
         heading.setTextSize(22);
         heading.setTypeface(null, android.graphics.Typeface.BOLD);
-        heading.setPadding(0, dp(28), 0, dp(8));
+        heading.setPadding(0, dp(18), 0, dp(8));
         page.addView(heading);
 
         for (ServerProfiles.Profile profile : profiles) {
@@ -1738,6 +2021,12 @@ public class MainActivity extends Activity {
             writeConfig(data.getData());
         } else if (requestCode == REQUEST_IMPORT && resultCode == RESULT_OK && data != null) {
             readConfig(data.getData());
+        } else if (requestCode == REQUEST_SPLIT_EXPORT
+                && resultCode == RESULT_OK && data != null) {
+            writeSplitConfig(data.getData());
+        } else if (requestCode == REQUEST_SPLIT_IMPORT
+                && resultCode == RESULT_OK && data != null) {
+            readSplitConfig(data.getData());
         }
     }
 

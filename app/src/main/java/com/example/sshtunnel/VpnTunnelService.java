@@ -58,14 +58,15 @@ public class VpnTunnelService extends VpnService {
 
     private void establishVpn(int socksPort) {
         try {
-            int mtu = NetworkTuning.vpnMtu(new SecureStore(this));
+            SecureStore store = new SecureStore(this);
+            int mtu = NetworkTuning.vpnMtu(store);
+            SplitTunnel.Routing routing = SplitTunnel.resolve(store);
             VpnService.Builder builder = new VpnService.Builder()
                     .setSession(Branding.appName(this))
                     .setMtu(mtu)
                     .setBlocking(false)
-                    .addAddress("198.18.0.1", 32)
-                    .addRoute("0.0.0.0", 0)
-                    .addDnsServer("198.18.0.2");
+                    .addAddress("198.18.0.1", 32);
+            routing.apply(builder);
             try {
                 builder.addDisallowedApplication(getPackageName());
             } catch (Exception ignored) {
@@ -90,7 +91,7 @@ public class VpnTunnelService extends VpnService {
             hev.sockstun.TProxyService.TProxyStartService(config.getAbsolutePath(), tun.getFd());
             nativeStarted = true;
             starting = false;
-            send("VPN подключён: весь TCP-трафик через SSH");
+            send("VPN подключён: " + routing.label());
         } catch (Throwable error) {
             send("Ошибка запуска VPN: " + error.getClass().getSimpleName());
             stopVpn(true);

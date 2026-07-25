@@ -129,6 +129,23 @@
                     android:text="Можно включить вместе с VPN или использовать отдельно."
                     android:textColor="#8F949F"
                     android:textSize="13sp" />
+
+                <Button
+                    android:id="@+id/splitTunnelButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:text="РАЗДЕЛЬНОЕ ТУННЕЛИРОВАНИЕ" />
+
+                <TextView
+                    android:id="@+id/splitTunnelSummary"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center"
+                    android:paddingTop="4dp"
+                    android:text="Выключено · весь трафик через VPN"
+                    android:textColor="#8F949F"
+                    android:textSize="12sp" />
             </LinearLayout>
 
             <TextView

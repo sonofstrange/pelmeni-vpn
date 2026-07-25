@@ -1,414 +1,493 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:fillViewport="true">
+    android:background="#101114"
+    android:fitsSystemWindows="true"
+    android:orientation="vertical">
 
-    <LinearLayout
+    <ScrollView
+        android:id="@+id/mainScroll"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:paddingStart="20dp"
-        android:paddingTop="14dp"
-        android:paddingEnd="20dp"
-        android:paddingBottom="24dp">
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:clipToPadding="false"
+        android:fillViewport="true">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
-
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:orientation="vertical">
-
-                <TextView
-                    android:id="@+id/appTitle"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="@string/app_name"
-                    android:textColor="#17211B"
-                    android:textSize="28sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Безопасное подключение"
-                    android:textColor="#65736A"
-                    android:textSize="14sp" />
-            </LinearLayout>
-
-            <ImageButton
-                android:id="@+id/moreActions"
-                android:layout_width="48dp"
-                android:layout_height="48dp"
-                android:background="?android:attr/selectableItemBackgroundBorderless"
-                android:contentDescription="Дополнительные действия"
-                android:padding="12dp"
-                android:src="@drawable/ic_more_vert" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:background="@drawable/panel_background"
             android:orientation="vertical"
-            android:padding="16dp">
+            android:paddingStart="20dp"
+            android:paddingTop="16dp"
+            android:paddingEnd="20dp"
+            android:paddingBottom="28dp">
+
+            <TextView
+                android:id="@+id/appTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/app_name"
+                android:textColor="#F5F6F7"
+                android:textSize="28sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="SSH-туннель с быстрым переключением серверов"
+                android:textColor="#8F949F"
+                android:textSize="14sp" />
 
             <TextView
                 android:id="@+id/status"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:layout_marginTop="30dp"
+                android:gravity="center"
                 android:text="Отключено"
-                android:textColor="#17211B"
-                android:textSize="18sp"
+                android:textColor="#A4A8B1"
+                android:textSize="16sp" />
+
+            <Button
+                android:id="@+id/toggle"
+                android:layout_width="210dp"
+                android:layout_height="210dp"
+                android:layout_gravity="center_horizontal"
+                android:layout_marginTop="12dp"
+                android:background="@drawable/connect_button_background"
+                android:gravity="center"
+                android:padding="20dp"
+                android:text="ПОДКЛЮЧИТЬ"
+                android:textColor="#FFB166"
+                android:textSize="19sp"
                 android:textStyle="bold" />
 
             <TextView
                 android:id="@+id/speedPing"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:text="Скорость: 0 Б/с · Задержка: —"
-                android:textColor="#526159"
+                android:layout_marginTop="16dp"
+                android:gravity="center"
+                android:text="Скорость: 0 Б/с · Пинг: —"
+                android:textColor="#A6ABB5"
                 android:textSize="15sp" />
-        </LinearLayout>
 
-        <LinearLayout
-            android:id="@+id/debugPanel"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:background="@drawable/debug_panel_background"
-            android:orientation="vertical"
-            android:padding="16dp"
-            android:visibility="gone">
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="24dp"
+                android:background="@drawable/panel_background"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Куда направлять трафик"
+                    android:textColor="#F1F2F4"
+                    android:textSize="17sp"
+                    android:textStyle="bold" />
+
+                <CheckBox
+                    android:id="@+id/enableVpn"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="VPN для всего телефона"
+                    android:textColor="#ECEEF1"
+                    android:textSize="16sp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:paddingStart="34dp"
+                    android:text="Браузер и остальные приложения пойдут через выбранный сервер."
+                    android:textColor="#8F949F"
+                    android:textSize="13sp" />
+
+                <CheckBox
+                    android:id="@+id/enableTelegram"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:checked="true"
+                    android:text="Локальный прокси для Telegram"
+                    android:textColor="#ECEEF1"
+                    android:textSize="16sp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:paddingStart="34dp"
+                    android:text="Можно включить вместе с VPN или использовать отдельно."
+                    android:textColor="#8F949F"
+                    android:textSize="13sp" />
+            </LinearLayout>
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="HUYNA DEBUG"
-                android:textColor="#FF2DAA"
-                android:textSize="16sp"
+                android:layout_marginTop="24dp"
+                android:text="Активный сервер"
+                android:textColor="#F1F2F4"
+                android:textSize="18sp"
                 android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/debugInfo"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:fontFamily="monospace"
-                android:text="Сервис отключён"
-                android:textColor="#D8E8FF"
-                android:textSize="13sp" />
-        </LinearLayout>
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:text="Режим подключения"
-            android:textColor="#17211B"
-            android:textSize="16sp"
-            android:textStyle="bold" />
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:orientation="vertical">
-
-            <CheckBox
-                android:id="@+id/enableVpn"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Включить VPN для всего телефона"
-                android:textSize="16sp" />
-
-            <CheckBox
-                android:id="@+id/enableTelegram"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:checked="true"
-                android:text="Включить прокси для Telegram"
-                android:textSize="16sp" />
-        </LinearLayout>
-
-        <TextView
-            android:id="@+id/serverSectionTitle"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="18dp"
-            android:text="Сервер"
-            android:textColor="#17211B"
-            android:textSize="16sp"
-            android:textStyle="bold" />
-
-        <LinearLayout
-            android:id="@+id/serverProfileCard"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:background="@drawable/panel_background"
-            android:orientation="vertical"
-            android:padding="16dp">
-
-            <TextView
-                android:id="@+id/serverName"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Сервер не добавлен"
-                android:textColor="#17211B"
-                android:textSize="19sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/serverAddress"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="3dp"
-                android:text="Добавь первый сервер"
-                android:textColor="#65736A"
-                android:textSize="14sp" />
 
             <LinearLayout
+                android:id="@+id/serverProfileCard"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="10dp"
-                android:orientation="horizontal">
+                android:background="@drawable/panel_background"
+                android:orientation="vertical"
+                android:padding="18dp">
 
-                <Button
-                    android:id="@+id/serverSelect"
-                    android:layout_width="0dp"
+                <TextView
+                    android:id="@+id/serverName"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="СМЕНИТЬ" />
+                    android:text="Сервер не добавлен"
+                    android:textColor="#F5F6F7"
+                    android:textSize="22sp"
+                    android:textStyle="bold" />
 
-                <Button
-                    android:id="@+id/serverEdit"
-                    android:layout_width="0dp"
+                <TextView
+                    android:id="@+id/serverAddress"
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
-                    android:layout_weight="1"
-                    android:text="ПАРАМЕТРЫ" />
+                    android:layout_marginTop="5dp"
+                    android:text="Добавь первый сервер"
+                    android:textColor="#9297A2"
+                    android:textSize="14sp" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="Нажми «Выбрать», чтобы быстро переключиться. Параметры и TLS хранятся отдельно для каждого сервера."
+                    android:textColor="#777C87"
+                    android:textSize="12sp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:orientation="horizontal">
+
+                    <Button
+                        android:id="@+id/serverSelect"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="ВЫБРАТЬ" />
+
+                    <Button
+                        android:id="@+id/serverEdit"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp"
+                        android:layout_weight="1"
+                        android:text="ПАРАМЕТРЫ" />
+                </LinearLayout>
             </LinearLayout>
-        </LinearLayout>
 
-        <EditText
-            android:id="@+id/host"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="IP-адрес или домен"
-            android:inputType="textUri"
-            android:singleLine="true"
-            android:visibility="gone" />
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:background="@drawable/panel_background"
+                android:orientation="vertical"
+                android:padding="16dp">
 
-        <LinearLayout
-            android:id="@+id/legacyPorts"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:visibility="gone">
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Трафик"
+                    android:textColor="#F1F2F4"
+                    android:textSize="17sp"
+                    android:textStyle="bold" />
 
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="За сессию"
+                    android:textColor="#858A95"
+                    android:textSize="13sp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="5dp"
+                    android:orientation="horizontal">
+
+                    <ImageView
+                        android:layout_width="20dp"
+                        android:layout_height="20dp"
+                        android:contentDescription="Загружено"
+                        android:src="@drawable/ic_download" />
+
+                    <TextView
+                        android:id="@+id/sessionDown"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="6dp"
+                        android:layout_weight="1"
+                        android:text="0 Б"
+                        android:textColor="#EDEEF0"
+                        android:textSize="16sp"
+                        android:textStyle="bold" />
+
+                    <ImageView
+                        android:layout_width="20dp"
+                        android:layout_height="20dp"
+                        android:contentDescription="Отправлено"
+                        android:src="@drawable/ic_upload" />
+
+                    <TextView
+                        android:id="@+id/sessionUp"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="6dp"
+                        android:layout_weight="1"
+                        android:text="0 Б"
+                        android:textColor="#EDEEF0"
+                        android:textSize="16sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:layout_marginTop="13dp"
+                    android:layout_marginBottom="11dp"
+                    android:background="#303239" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="За всё время"
+                    android:textColor="#858A95"
+                    android:textSize="13sp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="5dp"
+                    android:orientation="horizontal">
+
+                    <ImageView
+                        android:layout_width="20dp"
+                        android:layout_height="20dp"
+                        android:contentDescription="Загружено всего"
+                        android:src="@drawable/ic_download" />
+
+                    <TextView
+                        android:id="@+id/totalDown"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="6dp"
+                        android:layout_weight="1"
+                        android:text="0 Б"
+                        android:textColor="#EDEEF0"
+                        android:textSize="16sp"
+                        android:textStyle="bold" />
+
+                    <ImageView
+                        android:layout_width="20dp"
+                        android:layout_height="20dp"
+                        android:contentDescription="Отправлено всего"
+                        android:src="@drawable/ic_upload" />
+
+                    <TextView
+                        android:id="@+id/totalUp"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="6dp"
+                        android:layout_weight="1"
+                        android:text="0 Б"
+                        android:textColor="#EDEEF0"
+                        android:textSize="16sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/debugPanel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:background="@drawable/debug_panel_background"
+                android:orientation="vertical"
+                android:padding="16dp"
+                android:visibility="gone">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="HUYNA DEBUG"
+                    android:textColor="#FF2DAA"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/debugInfo"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:fontFamily="monospace"
+                    android:text="Сервис отключён"
+                    android:textColor="#D8E8FF"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
+            <EditText
+                android:id="@+id/host"
+                android:layout_width="1dp"
+                android:layout_height="1dp"
+                android:visibility="gone" />
             <EditText
                 android:id="@+id/port"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:hint="SSH-порт"
-                android:inputType="number"
-                android:singleLine="true" />
-
+                android:layout_width="1dp"
+                android:layout_height="1dp"
+                android:visibility="gone" />
             <EditText
                 android:id="@+id/socksPort"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="12dp"
-                android:layout_weight="1"
-                android:hint="SOCKS5-порт"
-                android:inputType="number"
-                android:singleLine="true" />
+                android:layout_width="1dp"
+                android:layout_height="1dp"
+                android:visibility="gone" />
+            <EditText
+                android:id="@+id/user"
+                android:layout_width="1dp"
+                android:layout_height="1dp"
+                android:visibility="gone" />
+            <EditText
+                android:id="@+id/password"
+                android:layout_width="1dp"
+                android:layout_height="1dp"
+                android:visibility="gone" />
+            <CheckBox
+                android:id="@+id/showPassword"
+                android:layout_width="1dp"
+                android:layout_height="1dp"
+                android:visibility="gone" />
+            <CheckBox
+                android:id="@+id/autoReconnect"
+                android:layout_width="1dp"
+                android:layout_height="1dp"
+                android:visibility="gone" />
+            <CheckBox
+                android:id="@+id/startOnBoot"
+                android:layout_width="1dp"
+                android:layout_height="1dp"
+                android:visibility="gone" />
+            <Button
+                android:id="@+id/save"
+                android:layout_width="1dp"
+                android:layout_height="1dp"
+                android:visibility="gone" />
         </LinearLayout>
+    </ScrollView>
 
-        <EditText
-            android:id="@+id/user"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="Пользователь SSH"
-            android:inputType="text"
-            android:singleLine="true"
-            android:visibility="gone" />
-
-        <EditText
-            android:id="@+id/password"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="Пароль SSH"
-            android:inputType="textPassword"
-            android:singleLine="true"
-            android:visibility="gone" />
-
-        <CheckBox
-            android:id="@+id/showPassword"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Показать пароль"
-            android:visibility="gone" />
-
-        <CheckBox
-            android:id="@+id/autoReconnect"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:checked="true"
-            android:text="Переподключаться при смене сети" />
-
-        <CheckBox
-            android:id="@+id/startOnBoot"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Восстанавливать после перезагрузки" />
-
-        <Button
-            android:id="@+id/save"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="СОХРАНИТЬ НАСТРОЙКИ"
-            android:visibility="gone" />
-
-        <Button
-            android:id="@+id/toggle"
-            android:layout_width="match_parent"
-            android:layout_height="64dp"
-            android:layout_marginTop="12dp"
-            android:text="ПОДКЛЮЧИТЬ"
-            android:textSize="19sp"
-            android:textStyle="bold" />
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="66dp"
+        android:background="@drawable/bottom_bar_background"
+        android:gravity="center"
+        android:orientation="horizontal"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp">
 
         <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="18dp"
-            android:background="@drawable/panel_background"
-            android:orientation="vertical"
-            android:padding="16dp">
+            android:id="@+id/navHome"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:orientation="vertical">
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Трафик"
-                android:textColor="#17211B"
-                android:textSize="17sp"
+                android:text="●"
+                android:textColor="#FFAA5B"
+                android:textSize="28sp" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Главная"
+                android:textColor="#FFAA5B"
+                android:textSize="11sp"
                 android:textStyle="bold" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/navPeople"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:orientation="vertical">
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:text="За сессию"
-                android:textColor="#65736A"
-                android:textSize="13sp" />
-
-            <LinearLayout
-                android:layout_width="match_parent"
+                android:text="WIP"
+                android:textColor="#B8BBC3"
+                android:textSize="21sp"
+                android:textStyle="bold" />
+            <TextView
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:orientation="horizontal">
+                android:text="Люди"
+                android:textColor="#B8BBC3"
+                android:textSize="11sp" />
+        </LinearLayout>
 
-                <ImageView
-                    android:layout_width="20dp"
-                    android:layout_height="20dp"
-                    android:contentDescription="Загружено"
-                    android:src="@drawable/ic_download" />
-
-                <TextView
-                    android:id="@+id/sessionDown"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="6dp"
-                    android:layout_weight="1"
-                    android:text="0 Б"
-                    android:textColor="#17211B"
-                    android:textSize="16sp"
-                    android:textStyle="bold" />
-
-                <ImageView
-                    android:layout_width="20dp"
-                    android:layout_height="20dp"
-                    android:contentDescription="Отправлено"
-                    android:src="@drawable/ic_upload" />
-
-                <TextView
-                    android:id="@+id/sessionUp"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="6dp"
-                    android:layout_weight="1"
-                    android:text="0 Б"
-                    android:textColor="#17211B"
-                    android:textSize="16sp"
-                    android:textStyle="bold" />
-            </LinearLayout>
-
-            <View
-                android:layout_width="match_parent"
-                android:layout_height="1dp"
-                android:layout_marginTop="12dp"
-                android:layout_marginBottom="10dp"
-                android:background="#DCE5DF" />
+        <LinearLayout
+            android:id="@+id/navSettings"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:orientation="vertical">
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="За всё время"
-                android:textColor="#65736A"
-                android:textSize="13sp" />
-
-            <LinearLayout
-                android:layout_width="match_parent"
+                android:text="⚙"
+                android:textColor="#B8BBC3"
+                android:textSize="30sp" />
+            <TextView
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:orientation="horizontal">
+                android:text="Настройки"
+                android:textColor="#B8BBC3"
+                android:textSize="11sp" />
+        </LinearLayout>
 
-                <ImageView
-                    android:layout_width="20dp"
-                    android:layout_height="20dp"
-                    android:contentDescription="Загружено всего"
-                    android:src="@drawable/ic_download" />
+        <LinearLayout
+            android:id="@+id/navAdd"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:orientation="vertical">
 
-                <TextView
-                    android:id="@+id/totalDown"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="6dp"
-                    android:layout_weight="1"
-                    android:text="0 Б"
-                    android:textColor="#17211B"
-                    android:textSize="16sp"
-                    android:textStyle="bold" />
-
-                <ImageView
-                    android:layout_width="20dp"
-                    android:layout_height="20dp"
-                    android:contentDescription="Отправлено всего"
-                    android:src="@drawable/ic_upload" />
-
-                <TextView
-                    android:id="@+id/totalUp"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="6dp"
-                    android:layout_weight="1"
-                    android:text="0 Б"
-                    android:textColor="#17211B"
-                    android:textSize="16sp"
-                    android:textStyle="bold" />
-            </LinearLayout>
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="+"
+                android:textColor="#B8BBC3"
+                android:textSize="34sp" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Сервер"
+                android:textColor="#B8BBC3"
+                android:textSize="11sp" />
         </LinearLayout>
     </LinearLayout>
-</ScrollView>
+</LinearLayout>

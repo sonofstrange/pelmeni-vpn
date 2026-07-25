@@ -22,7 +22,6 @@ import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
-import android.widget.PopupMenu;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -52,6 +51,8 @@ public class MainActivity extends Activity {
     private TextView sessionDown, sessionUp, totalDown, totalUp;
     private Button toggle, save, serverSelect, serverEdit;
     private CheckBox showPassword, autoReconnect, startOnBoot, enableVpn, enableTelegram;
+    private ScrollView mainScroll;
+    private View navHome, navPeople, navSettings, navAdd;
     private boolean running;
     private boolean receiverRegistered;
     private volatile boolean speedTestRunning;
@@ -94,6 +95,11 @@ public class MainActivity extends Activity {
         startOnBoot = findViewById(R.id.startOnBoot);
         enableVpn = findViewById(R.id.enableVpn);
         enableTelegram = findViewById(R.id.enableTelegram);
+        mainScroll = findViewById(R.id.mainScroll);
+        navHome = findViewById(R.id.navHome);
+        navPeople = findViewById(R.id.navPeople);
+        navSettings = findViewById(R.id.navSettings);
+        navAdd = findViewById(R.id.navAdd);
 
         ServerProfiles.migrateLegacy(new SecureStore(this));
         Branding.restoreLauncherState(this);
@@ -143,7 +149,11 @@ public class MainActivity extends Activity {
                     ServerProfiles.active(new SecureStore(this));
             showServerEditor(active);
         });
-        findViewById(R.id.moreActions).setOnClickListener(this::showMoreActions);
+        findViewById(R.id.serverProfileCard).setOnClickListener(v -> showServerList());
+        navHome.setOnClickListener(v -> mainScroll.smoothScrollTo(0, 0));
+        navPeople.setOnClickListener(v -> showPeopleWip());
+        navSettings.setOnClickListener(v -> showSettingsHub());
+        navAdd.setOnClickListener(v -> showServerEditor(null));
         if (getIntent().getBooleanExtra(EXTRA_START_FROM_TILE, false)) {
             getIntent().removeExtra(EXTRA_START_FROM_TILE);
             toggle.post(() -> {
@@ -153,50 +163,126 @@ public class MainActivity extends Activity {
         maybeCheckForUpdate(false);
     }
 
-    private void showMoreActions(android.view.View anchor) {
-        PopupMenu popup = new PopupMenu(this, anchor);
-        popup.getMenuInflater().inflate(R.menu.main_actions, popup.getMenu());
-        popup.getMenu().findItem(R.id.actionImport).setEnabled(!running);
-        popup.getMenu().findItem(R.id.actionExport).setEnabled(!running);
-        popup.getMenu().findItem(R.id.actionSpeedTest).setEnabled(TunnelService.isConnected());
-        popup.getMenu().findItem(R.id.actionProtection).setEnabled(!running);
-        popup.setOnMenuItemClickListener(item -> {
-            if (item.getItemId() == R.id.actionImport) {
-                beginImport();
-                return true;
-            }
-            if (item.getItemId() == R.id.actionExport) {
-                beginExport();
-                return true;
-            }
-            if (item.getItemId() == R.id.actionTelegram) {
-                openTelegramProxy();
-                return true;
-            }
-            if (item.getItemId() == R.id.actionSpeedTest) {
-                confirmSpeedTest();
-                return true;
-            }
-            if (item.getItemId() == R.id.actionProtection) {
-                showTlsProtection();
-                return true;
-            }
-            if (item.getItemId() == R.id.actionUpdate) {
-                if (Branding.isSecret(this)) showUpdateChannelChoice();
-                else maybeCheckForUpdate(true, false);
-                return true;
-            }
-            if (item.getItemId() == R.id.actionAdvanced) {
-                showAdvancedSettings();
-                return true;
-            }
-            if (item.getItemId() == R.id.actionResetRuntime) {
-                resetRuntimeState();
-                return true;
-            }
-            return false;
+    private void showPeopleWip() {
+        new AlertDialog.Builder(this)
+                .setTitle("Люди и доступ · WIP")
+                .setMessage("Здесь появится управление другими людьми: создание отдельного "
+                        + "доступа к выбранному VPN, приглашения и отзыв доступа.\n\n"
+                        + "Сейчас это только заготовка интерфейса. Серверные пользователи "
+                        + "и их права будут добавлены в следующей задаче.")
+                .setPositiveButton("Понятно", null)
+                .show();
+    }
+
+    private void showSettingsHub() {
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.VERTICAL);
+        int padding = Math.round(14 * getResources().getDisplayMetrics().density);
+        actions.setPadding(padding, 4, padding, 8);
+        AlertDialog[] dialogHolder = new AlertDialog[1];
+
+        addSettingsAction(actions, "Поведение подключения",
+                "Автопереподключение и запуск после перезагрузки",
+                () -> showConnectionBehavior(), dialogHolder);
+        addSettingsAction(actions, "Защита соединения · TLS",
+                "Настройка, включение или удаление TLS активного сервера",
+                this::showTlsProtection, dialogHolder);
+        addSettingsAction(actions, "Тонкая настройка сервера",
+                "Окно SSH, размер пакета и MTU",
+                this::showAdvancedSettings, dialogHolder);
+        addSettingsAction(actions, "Импортировать конфиг",
+                "Добавить новый сервер из файла",
+                this::beginImport, dialogHolder);
+        addSettingsAction(actions, "Экспортировать и поделиться",
+                "Передать настройки активного сервера",
+                this::beginExport, dialogHolder);
+        addSettingsAction(actions, "Прокси для Telegram",
+                "Открыть локальный SOCKS5 в приложении Telegram",
+                this::openTelegramProxy, dialogHolder);
+        addSettingsAction(actions, "Проверка скорости",
+                "Тест загрузки, выгрузки и пинга через туннель",
+                this::confirmSpeedTest, dialogHolder);
+        addSettingsAction(actions, "Проверить обновления",
+                Branding.isSecret(this)
+                        ? "Выбор стабильного или beta-канала"
+                        : "Только проверенные стабильные релизы",
+                () -> {
+                    if (Branding.isSecret(this)) showUpdateChannelChoice();
+                    else maybeCheckForUpdate(true, false);
+                }, dialogHolder);
+        addSettingsAction(actions, "Сбросить временное состояние",
+                "Не удаляет серверы, настройки и статистику",
+                this::resetRuntimeState, dialogHolder);
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(actions);
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Настройки и инструменты")
+                .setMessage("Все дополнительные функции собраны здесь.")
+                .setView(scroll)
+                .setNegativeButton("Закрыть", null)
+                .create();
+        dialogHolder[0] = dialog;
+        dialog.show();
+    }
+
+    private void addSettingsAction(
+            LinearLayout parent, String title, String subtitle, Runnable action,
+            AlertDialog[] dialogHolder) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        int horizontal = Math.round(16 * getResources().getDisplayMetrics().density);
+        int vertical = Math.round(13 * getResources().getDisplayMetrics().density);
+        card.setPadding(horizontal, vertical, horizontal, vertical);
+        card.setBackgroundResource(R.drawable.settings_action_background);
+        card.setClickable(true);
+        card.setFocusable(true);
+
+        TextView titleView = new TextView(this);
+        titleView.setText(title + "  ›");
+        titleView.setTextColor(0xFFF3F4F6);
+        titleView.setTextSize(16);
+        titleView.setTypeface(null, android.graphics.Typeface.BOLD);
+        card.addView(titleView);
+
+        TextView subtitleView = new TextView(this);
+        subtitleView.setText(subtitle);
+        subtitleView.setTextColor(0xFF9297A2);
+        subtitleView.setTextSize(12);
+        subtitleView.setPadding(0, 3, 0, 0);
+        card.addView(subtitleView);
+
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        params.bottomMargin = Math.round(9 * getResources().getDisplayMetrics().density);
+        parent.addView(card, params);
+        card.setOnClickListener(v -> {
+            if (dialogHolder[0] != null) dialogHolder[0].dismiss();
+            action.run();
         });
-        popup.show();
+    }
+
+    private void showConnectionBehavior() {
+        boolean[] values = {
+                autoReconnect.isChecked(),
+                startOnBoot.isChecked()
+        };
+        new AlertDialog.Builder(this)
+                .setTitle("Поведение подключения")
+                .setMessage("Автопереподключение восстанавливает туннель после смены Wi‑Fi "
+                        + "или мобильной сети. Автозапуск пытается вернуть последнее "
+                        + "подключение после перезагрузки телефона.")
+                .setMultiChoiceItems(new String[]{
+                                "Переподключаться при смене сети",
+                                "Восстанавливать после перезагрузки"
+                        }, values, (ignored, which, checked) -> values[which] = checked)
+                .setPositiveButton("Сохранить", (ignored, which) -> {
+                    autoReconnect.setChecked(values[0]);
+                    startOnBoot.setChecked(values[1]);
+                })
+                .setNegativeButton("Отмена", null)
+                .show();
     }
 
     private void showAdvancedSettings() {
@@ -274,13 +360,13 @@ public class MainActivity extends Activity {
         TextView titleView = new TextView(this);
         titleView.setText(title);
         titleView.setTextSize(16);
-        titleView.setTextColor(0xFF17211B);
+        titleView.setTextColor(0xFFF1F2F4);
         titleView.setPadding(0, 14, 0, 0);
         parent.addView(titleView);
         TextView explanationView = new TextView(this);
         explanationView.setText(explanation);
         explanationView.setTextSize(13);
-        explanationView.setTextColor(0xFF65736A);
+        explanationView.setTextColor(0xFF9297A2);
         parent.addView(explanationView);
         EditText field = new EditText(this);
         field.setText(Integer.toString(value));
@@ -867,23 +953,135 @@ public class MainActivity extends Activity {
             showServerEditor(null);
             return;
         }
-        String[] labels = new String[profiles.size()];
         ServerProfiles.Profile active = ServerProfiles.active(store);
-        for (int i = 0; i < profiles.size(); i++) {
-            ServerProfiles.Profile profile = profiles.get(i);
-            labels[i] = (active != null && active.id.equals(profile.id) ? "✓ " : "")
-                    + profile.name + "\n" + profile.host + ":" + profile.sshPort;
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        int padding = Math.round(18 * getResources().getDisplayMetrics().density);
+        list.setPadding(padding, 4, padding, padding);
+        AlertDialog[] dialogHolder = new AlertDialog[1];
+
+        if (active != null) {
+            TextView currentName = new TextView(this);
+            currentName.setText(active.name);
+            currentName.setTextColor(0xFFF3F4F6);
+            currentName.setTextSize(25);
+            currentName.setGravity(android.view.Gravity.CENTER);
+            currentName.setTypeface(null, android.graphics.Typeface.BOLD);
+            currentName.setPadding(0, padding, 0, 4);
+            list.addView(currentName);
+
+            TextView currentAddress = new TextView(this);
+            currentAddress.setText(active.host + ":" + active.sshPort
+                    + "  ·  SSH / SOCKS5");
+            currentAddress.setTextColor(0xFF9297A2);
+            currentAddress.setTextSize(13);
+            currentAddress.setGravity(android.view.Gravity.CENTER);
+            currentAddress.setPadding(0, 0, 0, padding);
+            list.addView(currentAddress);
         }
-        AlertDialog.Builder builder = new AlertDialog.Builder(this)
-                .setTitle("Выбери сервер")
-                .setItems(labels, (ignored, which) ->
-                        switchToServer(profiles.get(which)))
-                .setNegativeButton("Закрыть", null);
+
+        TextView heading = new TextView(this);
+        heading.setText("Серверы");
+        heading.setTextColor(0xFFF3F4F6);
+        heading.setTextSize(22);
+        heading.setTypeface(null, android.graphics.Typeface.BOLD);
+        heading.setPadding(0, 8, 0, 8);
+        list.addView(heading);
+
+        for (ServerProfiles.Profile profile : profiles) {
+            boolean selected = active != null && active.id.equals(profile.id);
+            LinearLayout row = new LinearLayout(this);
+            row.setGravity(android.view.Gravity.CENTER_VERTICAL);
+            row.setPadding(2, 12, 0, 12);
+            row.setClickable(true);
+            row.setFocusable(true);
+            row.setOnClickListener(v -> {
+                if (dialogHolder[0] != null) dialogHolder[0].dismiss();
+                switchToServer(profile);
+            });
+
+            TextView marker = new TextView(this);
+            marker.setText(selected ? "●" : "○");
+            marker.setTextColor(selected ? 0xFFFFAA5B : 0xFF7D828D);
+            marker.setTextSize(27);
+            marker.setGravity(android.view.Gravity.CENTER);
+            marker.setContentDescription(selected ? "Выбран" : "Не выбран");
+            marker.setLayoutParams(new LinearLayout.LayoutParams(
+                    Math.round(54 * getResources().getDisplayMetrics().density),
+                    LinearLayout.LayoutParams.MATCH_PARENT));
+            row.addView(marker);
+
+            LinearLayout labels = new LinearLayout(this);
+            labels.setOrientation(LinearLayout.VERTICAL);
+            labels.setLayoutParams(new LinearLayout.LayoutParams(
+                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+
+            TextView name = new TextView(this);
+            name.setText(profile.name);
+            name.setTextColor(selected ? 0xFFFFAA5B : 0xFFF1F2F4);
+            name.setTextSize(18);
+            name.setSingleLine(true);
+            labels.addView(name);
+
+            TextView address = new TextView(this);
+            address.setText(profile.host + ":" + profile.sshPort);
+            address.setTextColor(0xFF9297A2);
+            address.setTextSize(13);
+            address.setSingleLine(true);
+            address.setPadding(0, 3, 0, 0);
+            labels.addView(address);
+            row.addView(labels);
+
+            Button edit = new Button(this);
+            edit.setText("⚙");
+            edit.setTextSize(23);
+            edit.setEnabled(!running);
+            edit.setContentDescription("Параметры сервера " + profile.name);
+            edit.setLayoutParams(new LinearLayout.LayoutParams(
+                    Math.round(62 * getResources().getDisplayMetrics().density),
+                    Math.round(56 * getResources().getDisplayMetrics().density)));
+            edit.setOnClickListener(v -> {
+                if (dialogHolder[0] != null) dialogHolder[0].dismiss();
+                showServerEditor(profile);
+            });
+            row.addView(edit);
+            list.addView(row);
+
+            View divider = new View(this);
+            divider.setBackgroundColor(0xFF2A2C31);
+            LinearLayout.LayoutParams dividerParams = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    Math.max(1, Math.round(getResources().getDisplayMetrics().density)));
+            dividerParams.leftMargin = Math.round(54 * getResources().getDisplayMetrics().density);
+            list.addView(divider, dividerParams);
+        }
+
         if (!running) {
-            builder.setNeutralButton("Добавить сервер",
-                    (ignored, which) -> showServerEditor(null));
+            Button add = new Button(this);
+            add.setText("＋  ДОБАВИТЬ СЕРВЕР");
+            add.setTextSize(15);
+            LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT);
+            addParams.topMargin = padding;
+            add.setOnClickListener(v -> {
+                if (dialogHolder[0] != null) dialogHolder[0].dismiss();
+                showServerEditor(null);
+            });
+            list.addView(add, addParams);
         }
-        builder.show();
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(list);
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Выбор сервера")
+                .setMessage(running
+                        ? "Нажми на сервер — приложение переподключит туннель автоматически."
+                        : "Нажми на строку для выбора, на шестерёнку — для настройки.")
+                .setView(scroll)
+                .setNegativeButton("Закрыть", null)
+                .create();
+        dialogHolder[0] = dialog;
+        dialog.show();
     }
 
     private void switchToServer(ServerProfiles.Profile profile) {
@@ -915,6 +1113,15 @@ public class MainActivity extends Activity {
         int padding = (int) (20 * getResources().getDisplayMetrics().density);
         fields.setPadding(padding, 4, padding, 4);
 
+        TextView intro = new TextView(this);
+        intro.setText("Название видно только тебе. Пароль хранится в зашифрованном "
+                + "хранилище Android. TLS и параметры скорости сохраняются отдельно "
+                + "для этого профиля.");
+        intro.setTextColor(0xFF9CA1AC);
+        intro.setTextSize(14);
+        intro.setPadding(0, 4, 0, 12);
+        fields.addView(intro);
+
         EditText profileName = addServerField(fields, "Название сервера",
                 profile == null ? "" : profile.name,
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
@@ -933,13 +1140,13 @@ public class MainActivity extends Activity {
         EditText profilePassword = addServerField(fields, "Пароль SSH",
                 profile == null ? "" : ServerProfiles.password(store, profile.id),
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        EditText profileWindow = addTuningField(fields,
+        EditText profileWindow = addServerTuningField(fields,
                 "Окно SSH · КиБ", "Буфер передачи. Рекомендуется 1024.",
                 profile == null ? NetworkTuning.DEFAULT_WINDOW_KIB : profile.windowKiB);
-        EditText profilePacket = addTuningField(fields,
+        EditText profilePacket = addServerTuningField(fields,
                 "Пакет SSH · КиБ", "Размер блока. Рекомендуется 32.",
                 profile == null ? NetworkTuning.DEFAULT_PACKET_KIB : profile.packetKiB);
-        EditText profileMtu = addTuningField(fields,
+        EditText profileMtu = addServerTuningField(fields,
                 "MTU VPN", "8500 быстрее; 1500 полезно при зависаниях.",
                 profile == null ? NetworkTuning.DEFAULT_MTU : profile.mtu);
 
@@ -964,6 +1171,17 @@ public class MainActivity extends Activity {
                 int window = parseInt(profileWindow);
                 int packet = parseInt(profilePacket);
                 int mtu = parseInt(profileMtu);
+                if (Branding.isSecretInput(h, pw)) {
+                    boolean enabled = Branding.toggleSecret(this);
+                    appTitle.setText(Branding.appName(this));
+                    updateDebugPanel();
+                    dialog.dismiss();
+                    Toast.makeText(this, enabled
+                                    ? "Huyna VPN debug mode activated"
+                                    : "Возвращено название «Пельмени VPN»",
+                            Toast.LENGTH_LONG).show();
+                    return;
+                }
                 if (!validHost(h) || !validPort(ssh) || !validPort(socks)
                         || u.isEmpty() || pw.isEmpty()
                         || !NetworkTuning.valid(window, NetworkTuning.MIN_WINDOW_KIB,
@@ -1004,13 +1222,75 @@ public class MainActivity extends Activity {
     }
 
     private EditText addServerField(
-            LinearLayout parent, String hint, String value, int inputType) {
+            LinearLayout parent, String label, String value, int inputType) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        int horizontal = Math.round(16 * getResources().getDisplayMetrics().density);
+        int vertical = Math.round(12 * getResources().getDisplayMetrics().density);
+        card.setPadding(horizontal, vertical, horizontal, vertical);
+        card.setBackgroundResource(R.drawable.settings_field_background);
+
+        TextView labelView = new TextView(this);
+        labelView.setText(label);
+        labelView.setTextColor(0xFF9297A2);
+        labelView.setTextSize(13);
+        card.addView(labelView);
+
         EditText field = new EditText(this);
-        field.setHint(hint);
         field.setText(value);
         field.setInputType(inputType);
         field.setSingleLine(true);
-        parent.addView(field);
+        field.setTextColor(0xFFF3F4F6);
+        field.setTextSize(18);
+        field.setPadding(0, 5, 0, 0);
+        field.setBackgroundColor(android.graphics.Color.TRANSPARENT);
+        card.addView(field);
+
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        params.bottomMargin = Math.round(10 * getResources().getDisplayMetrics().density);
+        parent.addView(card, params);
+        return field;
+    }
+
+    private EditText addServerTuningField(
+            LinearLayout parent, String label, String explanation, int value) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        int horizontal = Math.round(16 * getResources().getDisplayMetrics().density);
+        int vertical = Math.round(12 * getResources().getDisplayMetrics().density);
+        card.setPadding(horizontal, vertical, horizontal, vertical);
+        card.setBackgroundResource(R.drawable.settings_field_background);
+
+        TextView labelView = new TextView(this);
+        labelView.setText(label);
+        labelView.setTextColor(0xFF9297A2);
+        labelView.setTextSize(13);
+        card.addView(labelView);
+
+        EditText field = new EditText(this);
+        field.setText(Integer.toString(value));
+        field.setInputType(InputType.TYPE_CLASS_NUMBER);
+        field.setSelectAllOnFocus(true);
+        field.setTextColor(0xFFF3F4F6);
+        field.setTextSize(18);
+        field.setPadding(0, 5, 0, 0);
+        field.setBackgroundColor(android.graphics.Color.TRANSPARENT);
+        card.addView(field);
+
+        TextView explanationView = new TextView(this);
+        explanationView.setText(explanation);
+        explanationView.setTextColor(0xFF747985);
+        explanationView.setTextSize(12);
+        explanationView.setPadding(0, 3, 0, 0);
+        card.addView(explanationView);
+
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        params.bottomMargin = Math.round(10 * getResources().getDisplayMetrics().density);
+        parent.addView(card, params);
         return field;
     }
 
@@ -1365,6 +1645,7 @@ public class MainActivity extends Activity {
         status.setText(text);
         running = !text.equals("Отключено");
         toggle.setText(running ? "ОТКЛЮЧИТЬ" : "ПОДКЛЮЧИТЬ");
+        toggle.setActivated(running);
         setSettingsEnabled(!running);
         updateDebugPanel();
     }

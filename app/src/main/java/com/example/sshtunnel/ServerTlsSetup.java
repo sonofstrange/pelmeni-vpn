@@ -126,6 +126,32 @@ final class ServerTlsSetup {
         }
     }
 
+    static void remove(SecureStore store) throws Exception {
+        Session session = connectPlain(store);
+        try {
+            String password = store.getSecret();
+            boolean root = execute(session, "id -u", "", 15_000)
+                    .output.trim().equals("0");
+            if (!root) {
+                ExecResult sudo = execute(
+                        session, "sudo -S -p '' -v", password + "\n", 30_000);
+                if (sudo.exitStatus != 0) {
+                    throw new Exception("Пользователю нужны права sudo с этим же паролем.");
+                }
+            }
+            String command = root ? "bash -s" : "sudo -n bash -s";
+            ExecResult result = execute(session, command, removeScript(), 60_000);
+            if (!result.output.contains("PELmeni_TLS_REMOVED=1")) {
+                android.util.Log.e("PelmeniTLS",
+                        "TLS removal exit=" + result.exitStatus
+                                + ", output=" + diagnosticTail(result.output));
+                throw new Exception("Не удалось полностью удалить TLS с сервера.");
+            }
+        } finally {
+            session.disconnect();
+        }
+    }
+
     private static Session connectPlain(SecureStore store) throws Exception {
         String host = store.getPlain("host", "").trim();
         String user = store.getPlain("user", "root").trim();
@@ -308,6 +334,24 @@ final class ServerTlsSetup {
                 + "/tcp comment 'Pelmeni VPN TLS fallback' >/dev/null || true\n"
                 + "fi\n"
                 + "echo 'PELmeni_FALLBACK_OK=1'\n";
+    }
+
+    private static String removeScript() {
+        return "set -Eeuo pipefail\n"
+                + "systemctl disable --now pelmeni-stunnel.service >/dev/null 2>&1 || true\n"
+                + "rm -f /etc/systemd/system/pelmeni-stunnel.service\n"
+                + "rm -f /etc/stunnel/pelmeni.conf\n"
+                + "rm -rf /etc/stunnel/pelmeni\n"
+                + "systemctl daemon-reload\n"
+                + "systemctl reset-failed pelmeni-stunnel.service >/dev/null 2>&1 || true\n"
+                + "if command -v ufw >/dev/null && ufw status | grep -q '^Status: active'; then\n"
+                + "  ufw --force delete allow 443/tcp >/dev/null 2>&1 || true\n"
+                + "  ufw --force delete allow 8443/tcp >/dev/null 2>&1 || true\n"
+                + "fi\n"
+                + "if id -u pelmeni-stunnel >/dev/null 2>&1; then\n"
+                + "  userdel pelmeni-stunnel >/dev/null 2>&1 || true\n"
+                + "fi\n"
+                + "echo 'PELmeni_TLS_REMOVED=1'\n";
     }
 
     private static boolean isAllowedFallback(int port) {

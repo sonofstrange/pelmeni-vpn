@@ -73,6 +73,12 @@ final class TlsTransport {
         store.putBoolean("tls_enabled", enabled && isConfigured(store));
     }
 
+    static void clear(SecureStore store) {
+        store.removeEncrypted(BUNDLE_KEY);
+        store.removeEncrypted(PASSWORD_KEY);
+        store.remove("tls_host", "tls_port", "tls_ports", "tls_enabled");
+    }
+
     static SocketFactory socketFactory(
             SecureStore store, Network network) throws Exception {
         byte[] bundle = store.getEncrypted(BUNDLE_KEY);

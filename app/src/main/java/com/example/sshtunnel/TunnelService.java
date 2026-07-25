@@ -324,13 +324,30 @@ public class TunnelService extends Service {
         if (Branding.isSecret(this)) {
             Session currentSession = session;
             SecureStore store = new SecureStore(this);
+            String configuredHost = store.getPlain("host", "").trim();
+            boolean tlsEnabled = TlsTransport.isEnabledFor(store, configuredHost);
             statsIntent.putExtra("debug_enabled", true)
+                    .putExtra("debug_version", BuildConfig.VERSION_NAME)
+                    .putExtra("debug_status", currentStatus)
                     .putExtra("debug_ssh_connected",
                             currentSession != null && currentSession.isConnected())
+                    .putExtra("debug_ssh_endpoint", configuredHost + ":"
+                            + parsePort(store.getPlain("port", "22"), 22))
+                    .putExtra("debug_transport", tlsEnabled
+                            ? "TLS:" + TlsTransport.port(store) : "обычный SSH")
                     .putExtra("debug_uptime_ms",
                             Math.max(0, SystemClock.elapsedRealtime() - serviceStartedAt))
                     .putExtra("debug_connect_attempts", connectionAttempts)
                     .putExtra("debug_socks_ports", TunnelMode.portsLabel(store))
+                    .putExtra("debug_tg_running",
+                            telegramProxy != null && telegramProxy.isRunning())
+                    .putExtra("debug_vpn_running",
+                            vpnProxy != null && vpnProxy.isRunning())
+                    .putExtra("debug_auto_reconnect",
+                            store.getBoolean("auto_reconnect", true))
+                    .putExtra("debug_tuning", NetworkTuning.windowKiB(store) + "/"
+                            + NetworkTuning.packetKiB(store) + "/"
+                            + NetworkTuning.vpnMtu(store))
                     .putExtra("debug_network", networkLabel(activeUnderlyingNetwork))
                     .putExtra("debug_mode", TunnelMode.label(store));
         }

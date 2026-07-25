@@ -196,8 +196,8 @@ public class MainActivity extends Activity {
                 NetworkTuning.packetKiB(store));
         EditText mtu = addTuningField(fields,
                 "MTU VPN · 1280–16000",
-                "Размер пакета виртуального TUN. 1400 стабильно работает на мобильных сетях; "
-                        + "слишком большие значения могут резко снизить выгрузку.",
+                "Размер пакета виртуального TUN. 8500 быстрее для tun2socks; 1500 полезно, "
+                        + "если отдельные сайты или тесты зависают.",
                 NetworkTuning.vpnMtu(store));
         Button autoTune = new Button(this);
         autoTune.setText("АВТОПОДБОР · ЭКСПЕРИМЕНТ");
@@ -206,7 +206,7 @@ public class MainActivity extends Activity {
 
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle("Тонкая настройка · для опытных")
-                .setMessage("Рекомендуется: окно 1024 КиБ, пакет 32 КиБ, MTU 1400. "
+                .setMessage("Рекомендуется: окно 1024 КиБ, пакет 32 КиБ, MTU 8500. "
                         + "Все изменения применяются при следующем подключении.")
                 .setView(scroll)
                 .setPositiveButton("Сохранить", null)
@@ -286,6 +286,8 @@ public class MainActivity extends Activity {
                 .setMessage(message)
                 .setNegativeButton("Закрыть", null);
         if (configured) {
+            builder.setNeutralButton("Удалить TLS с сервера",
+                    (ignored, which) -> confirmServerTlsRemoval());
             builder.setPositiveButton(enabled ? "Выключить" : "Включить",
                     (ignored, which) -> {
                         TlsTransport.setEnabled(store, !enabled);
@@ -295,13 +297,77 @@ public class MainActivity extends Activity {
                                         : "TLS-защита выключена. Серверная настройка сохранена.",
                                 Toast.LENGTH_LONG).show();
                     });
-            builder.setNeutralButton("Настроить заново",
-                    (ignored, which) -> confirmServerTlsSetup());
         } else {
             builder.setPositiveButton("Настроить сервер",
                     (ignored, which) -> confirmServerTlsSetup());
         }
         builder.show();
+    }
+
+    private void confirmServerTlsRemoval() {
+        if (running) {
+            Toast.makeText(this, "Сначала отключи туннель", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (serverSetupRunning) {
+            Toast.makeText(this, "Операция с сервером уже выполняется",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!saveSettings()) return;
+        new AlertDialog.Builder(this)
+                .setTitle("Полностью удалить TLS?")
+                .setMessage("С сервера будут удалены только компоненты Пельмени VPN: "
+                        + "служба pelmeni-stunnel, её конфигурация, сертификаты, "
+                        + "системный пользователь и правила UFW для 443/8443.\n\n"
+                        + "SSH-сервер и обычный VPN останутся. Правила внешнего firewall "
+                        + "в панели хостинга приложение изменить не может.")
+                .setPositiveButton("Удалить", (ignored, which) -> runServerTlsRemoval())
+                .setNegativeButton("Отмена", null)
+                .show();
+    }
+
+    private void runServerTlsRemoval() {
+        serverSetupRunning = true;
+        AlertDialog progress = new AlertDialog.Builder(this)
+                .setTitle("Удаление TLS")
+                .setMessage("Останавливаем и удаляем TLS-компоненты с сервера…")
+                .setCancelable(false)
+                .create();
+        progress.show();
+        speedWorker.execute(() -> {
+            try {
+                SecureStore store = new SecureStore(this);
+                ServerTlsSetup.remove(store);
+                TlsTransport.clear(store);
+                runOnUiThread(() -> {
+                    serverSetupRunning = false;
+                    progress.dismiss();
+                    if (isFinishing() || isDestroyed()) return;
+                    new AlertDialog.Builder(this)
+                            .setTitle("TLS удалён")
+                            .setMessage("Служба, конфигурация и сертификаты Пельмени VPN "
+                                    + "удалены с сервера. Локальные TLS-ключи также удалены.\n\n"
+                                    + "Теперь подключения будут идти напрямую по SSH.")
+                            .setPositiveButton("Готово", null)
+                            .show();
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    serverSetupRunning = false;
+                    progress.dismiss();
+                    if (isFinishing() || isDestroyed()) return;
+                    String message = error.getMessage();
+                    new AlertDialog.Builder(this)
+                            .setTitle("TLS не удалён")
+                            .setMessage(message == null || message.trim().isEmpty()
+                                    ? "Не удалось удалить TLS с сервера."
+                                    : message)
+                            .setPositiveButton("Понятно", null)
+                            .show();
+                });
+            }
+        });
     }
 
     private void confirmServerTlsSetup() {
@@ -865,13 +931,24 @@ public class MainActivity extends Activity {
                 intent.getLongExtra("total_uploaded", 0),
                 intent.getLongExtra("total_downloaded", 0));
         if (Branding.isSecret(this) && intent.getBooleanExtra("debug_enabled", false)) {
-            debugInfo.setText("SSH: "
+            debugInfo.setText("Версия: " + intent.getStringExtra("debug_version")
+                    + "\nСтатус: " + intent.getStringExtra("debug_status")
+                    + "\nSSH: "
                     + (intent.getBooleanExtra("debug_ssh_connected", false)
                     ? "соединение установлено" : "нет соединения")
+                    + "\nАдрес: " + intent.getStringExtra("debug_ssh_endpoint")
+                    + "\nТранспорт: " + intent.getStringExtra("debug_transport")
                     + "\nРежим: " + intent.getStringExtra("debug_mode")
                     + "\nСеть: " + intent.getStringExtra("debug_network")
                     + "\nРабочие SOCKS: "
                     + intent.getStringExtra("debug_socks_ports")
+                    + "\nTG / VPN: "
+                    + yesNo(intent.getBooleanExtra("debug_tg_running", false))
+                    + " / " + yesNo(intent.getBooleanExtra("debug_vpn_running", false))
+                    + "\nАвтопереподключение: "
+                    + yesNo(intent.getBooleanExtra("debug_auto_reconnect", true))
+                    + "\nОкно/пакет/MTU: "
+                    + intent.getStringExtra("debug_tuning")
                     + "\nВремя работы: "
                     + formatDuration(intent.getLongExtra("debug_uptime_ms", 0))
                     + "\nПопытки подключения: "
@@ -915,7 +992,23 @@ public class MainActivity extends Activity {
     private void updateDebugPanel() {
         boolean secret = Branding.isSecret(this);
         findViewById(R.id.debugPanel).setVisibility(secret ? View.VISIBLE : View.GONE);
-        if (secret && !running) debugInfo.setText("Сервис отключён");
+        if (secret && !running) {
+            SecureStore store = new SecureStore(this);
+            String configuredHost = store.getPlain("host", "").trim();
+            debugInfo.setText("Версия: " + BuildConfig.VERSION_NAME
+                    + "\nСтатус: сервис отключён"
+                    + "\nРежим: " + TunnelMode.label(store)
+                    + "\nTLS: " + yesNo(TlsTransport.isEnabledFor(store, configuredHost))
+                    + "\nАвтопереподключение: "
+                    + yesNo(store.getBoolean("auto_reconnect", true))
+                    + "\nОкно/пакет/MTU: " + NetworkTuning.windowKiB(store) + "/"
+                    + NetworkTuning.packetKiB(store) + "/"
+                    + NetworkTuning.vpnMtu(store));
+        }
+    }
+
+    private String yesNo(boolean value) {
+        return value ? "да" : "нет";
     }
 
     private void startTunnel() {

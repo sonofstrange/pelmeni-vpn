@@ -66,6 +66,10 @@ public class VpnTunnelService extends VpnService {
                     .addAddress("198.18.0.1", 32)
                     .addRoute("0.0.0.0", 0)
                     .addDnsServer("198.18.0.2");
+            try {
+                builder.addDisallowedApplication(getPackageName());
+            } catch (Exception ignored) {
+            }
             tun = builder.establish();
             if (tun == null) {
                 send("Android не разрешил создать VPN");

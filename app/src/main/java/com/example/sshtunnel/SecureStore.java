@@ -23,6 +23,11 @@ public final class SecureStore {
     public boolean getBoolean(String k, boolean d) { return prefs.getBoolean(k, d); }
     public void putLong(String k, long v) { prefs.edit().putLong(k, v).apply(); }
     public long getLong(String k, long d) { return prefs.getLong(k, d); }
+    public void remove(String... keys) {
+        SharedPreferences.Editor editor = prefs.edit();
+        for (String key : keys) editor.remove(key);
+        editor.apply();
+    }
     public void putEncrypted(String key, byte[] value) throws Exception {
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
         cipher.init(Cipher.ENCRYPT_MODE, getKey());

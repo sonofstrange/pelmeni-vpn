@@ -16,6 +16,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 /** Named destination lists and route calculation for split tunnelling. */
 public final class SplitTunnel {
@@ -24,22 +27,109 @@ public final class SplitTunnel {
     private static final String KEY_PROFILES = "split_profiles";
     private static final String KEY_ACTIVE = "split_active";
     private static final String KEY_ENABLED = "split_enabled";
-    private static final int MAX_ENTRIES = 256;
-    private static final int MAX_ROUTES = 1024;
+    private static final String KEY_BUILTIN_VERSION = "split_builtin_version";
+    private static final int BUILTIN_VERSION = 2;
+    private static final int MAX_ENTRIES = 512;
+    private static final int MAX_ROUTES = 8192;
 
     private static final String[] RUSSIAN_SERVICES = {
-            "yandex.ru", "ya.ru", "yandex.net", "yastatic.net", "yandexcloud.net",
-            "kinopoisk.ru", "dzen.ru",
-            "vk.com", "vk.ru", "userapi.com", "vkuseraudio.net", "vk-cdn.net",
-            "mail.ru", "imgsmail.ru", "mycdn.me", "ok.ru",
-            "gosuslugi.ru", "esia.gosuslugi.ru",
-            "ozon.ru", "ozonusercontent.com", "ozoncdn.com",
-            "wildberries.ru", "wb.ru", "wbbasket.ru",
-            "sber.ru", "sberbank.ru", "sberdevices.ru",
-            "tbank.ru", "tinkoff.ru", "tinkoffcdn.ru",
-            "rutube.ru", "rutube.video", "rutube-cdn.ru",
-            "avito.ru", "avito.st", "avcdn.net",
-            "2gis.ru", "2gis.com", "rambler.ru"
+            "yandex.ru", "ya.ru", "yandex.com", "yandex.net", "yastatic.net",
+            "yandexcloud.net", "yandex-team.ru", "yandex-bank.net", "yango.com",
+            "kinopoisk.ru", "dzen.ru", "auto.ru", "beru.ru",
+            "vk.com", "vk.ru", "vk.me", "vkontakte.ru", "userapi.com",
+            "vkuseraudio.net", "vk-cdn.net", "vk-portal.net", "vkuser.net",
+            "mail.ru", "imgsmail.ru", "mycdn.me", "ok.ru", "odnoklassniki.ru",
+            "gosuslugi.ru", "esia.gosuslugi.ru", "government.ru", "kremlin.ru",
+            "mos.ru", "mosreg.ru", "nalog.ru", "nalog.gov.ru", "sfr.gov.ru",
+            "rosreestr.gov.ru", "fssp.gov.ru",
+            "ozon.ru", "ozon.travel", "ozonusercontent.com", "ozoncdn.com",
+            "wildberries.ru", "wb.ru", "wbbasket.ru", "avito.ru", "avito.st",
+            "avcdn.net", "cian.ru", "vkusvill.ru", "megamarket.ru",
+            "dns-shop.ru", "citilink.ru", "mvideo.ru", "eldorado.ru",
+            "lamoda.ru", "aliexpress.ru",
+            "sber.ru", "sberbank.ru", "online.sberbank.ru", "sberdevices.ru",
+            "sbermarket.ru", "sbermegamarket.ru", "domclick.ru",
+            "tbank.ru", "tinkoff.ru", "tinkoffcdn.ru", "alfa-bank.ru",
+            "vtb.ru", "gpb.ru", "gazprombank.ru", "psbank.ru", "rshb.ru",
+            "sovcombank.ru", "mtsbank.ru", "raiffeisen.ru", "mkb.ru",
+            "nspk.ru", "mironline.ru",
+            "rutube.ru", "rutube.video", "rutube-cdn.ru", "ivi.ru", "okko.tv",
+            "premier.one", "start.ru", "wink.ru", "more.tv", "amediateka.ru",
+            "litres.ru",
+            "2gis.ru", "2gis.com", "rambler.ru", "hh.ru",
+            "ria.ru", "rbc.ru", "tass.ru", "rt.com", "lenta.ru", "gazeta.ru",
+            "kommersant.ru", "kp.ru", "vesti.ru", "smotrim.ru", "1tv.ru",
+            "ntv.ru", "ren.tv", "tnt-online.ru", "ctc.ru",
+            "mts.ru", "megafon.ru", "beeline.ru", "t2.ru", "tele2.ru",
+            "rt.ru", "rostelecom.ru",
+            "rzd.ru", "aeroflot.ru", "s7.ru", "pobeda.aero", "tutu.ru",
+            "aviasales.ru", "ostrovok.ru",
+            "cdek.ru", "boxberry.ru", "pochta.ru", "delivery-club.ru",
+            "kuper.ru", "yandexeda.ru",
+            "dnevnik.ru", "uchi.ru", "stepik.org", "skillbox.ru",
+            "geekbrains.ru", "netology.ru",
+            "apteka.ru", "eapteka.ru", "rigla.ru", "gemotest.ru", "invitro.ru",
+            "prodoctorov.ru"
+    };
+
+    /** Aggregated IPv4 announcements of major Russian service networks (RIPEstat). */
+    private static final String[] RUSSIAN_SERVICE_PREFIXES = {
+            "5.45.192.0/18", "5.61.16.0/21", "5.61.232.0/21", "5.101.40.0/22",
+            "5.181.60.0/22", "5.188.140.0/22", "5.255.192.0/18",
+            "31.177.104.0/22", "37.9.64.0/18", "37.139.32.0/22",
+            "37.139.40.0/22", "37.140.128.0/18", "45.84.128.0/22",
+            "45.136.20.0/22", "46.226.122.0/24", "62.217.160.0/20",
+            "77.88.0.0/18", "78.155.198.0/24", "79.137.139.0/24",
+            "79.137.157.0/24", "79.137.164.0/24", "79.137.174.0/23",
+            "79.137.180.0/24", "79.137.183.0/24", "79.137.240.0/21",
+            "80.67.40.0/22", "81.161.98.0/23", "83.166.232.0/21",
+            "83.166.248.0/21", "83.217.216.0/22", "83.222.28.0/22",
+            "84.23.52.0/22", "84.252.144.0/22", "84.252.149.0/24",
+            "84.252.150.0/23", "84.252.152.0/24", "84.252.160.0/19",
+            "85.142.115.0/24", "85.192.32.0/22", "85.198.76.0/22",
+            "87.239.104.0/21", "87.240.128.0/18", "87.242.112.0/22",
+            "87.250.224.0/19", "89.208.84.0/22", "89.208.196.0/22",
+            "89.208.208.0/22", "89.208.216.0/21", "89.208.228.0/22",
+            "89.221.228.0/22", "89.221.232.0/21", "90.156.148.0/22",
+            "90.156.212.0/22", "90.156.216.0/22", "90.156.232.0/21",
+            "90.156.247.0/24", "91.194.226.0/23", "91.206.127.0/24",
+            "91.212.64.0/24", "91.217.194.0/24", "91.218.132.0/22",
+            "91.219.224.0/22", "91.221.164.0/23", "91.221.198.0/23",
+            "91.223.93.0/24", "91.230.107.0/24", "91.231.132.0/22",
+            "91.233.216.0/22", "91.236.48.0/22", "92.38.217.0/24",
+            "92.255.112.0/20", "93.158.128.0/18", "93.186.224.0/20",
+            "94.100.176.0/20", "94.124.200.0/22", "94.124.206.0/23",
+            "94.139.244.0/22", "95.108.128.0/17", "95.142.192.0/20",
+            "95.163.32.0/19", "95.163.133.0/24", "95.163.180.0/22",
+            "95.163.208.0/21", "95.163.216.0/22", "95.163.248.0/21",
+            "95.213.0.0/17", "109.120.180.0/22", "109.120.188.0/22",
+            "109.172.74.0/24", "109.238.88.0/24", "109.238.90.0/23",
+            "128.140.168.0/21", "130.49.224.0/19", "132.243.176.0/22",
+            "138.16.192.0/20", "138.16.240.0/20", "141.8.128.0/18",
+            "146.185.208.0/22", "146.185.240.0/22", "155.212.192.0/20",
+            "155.212.234.0/23", "161.104.104.0/21", "176.101.88.0/24",
+            "176.101.90.0/24", "176.112.168.0/21", "176.114.120.0/21",
+            "178.22.88.0/21", "178.130.128.0/23", "178.154.128.0/18",
+            "178.237.16.0/20", "178.248.232.0/21", "185.5.136.0/22",
+            "185.16.148.0/22", "185.16.244.0/22", "185.32.187.0/24",
+            "185.32.248.0/22", "185.35.4.0/23", "185.35.6.0/24",
+            "185.62.200.0/23", "185.62.202.0/24", "185.65.148.0/22",
+            "185.66.84.0/22", "185.73.192.0/22", "185.86.144.0/22",
+            "185.89.12.0/24", "185.89.14.0/23", "185.94.108.0/22",
+            "185.100.104.0/22", "185.130.112.0/22", "185.131.68.0/22",
+            "185.138.252.0/22", "185.157.96.0/23", "185.157.99.0/24",
+            "185.169.152.0/22", "185.180.200.0/22", "185.187.63.0/24",
+            "185.226.52.0/22", "185.241.192.0/22", "188.93.56.0/21",
+            "193.203.40.0/22", "194.1.214.0/24", "194.54.14.0/23",
+            "194.186.63.0/24", "194.190.0.0/24", "194.190.139.0/24",
+            "195.34.20.0/23", "195.208.66.0/24", "195.211.20.0/22",
+            "195.218.190.0/23", "212.11.151.0/24", "212.67.24.0/22",
+            "212.111.84.0/22", "212.233.72.0/21", "212.233.80.0/22",
+            "212.233.88.0/21", "212.233.96.0/22", "212.233.120.0/22",
+            "213.59.252.0/22", "213.180.192.0/19", "213.184.155.0/24",
+            "213.184.156.0/22", "213.219.212.0/22", "217.14.19.0/24",
+            "217.16.16.0/20", "217.20.144.0/20", "217.69.128.0/20",
+            "217.174.188.0/22"
     };
 
     private SplitTunnel() {
@@ -115,15 +205,61 @@ public final class SplitTunnel {
     }
 
     public static void ensureDefaults(SecureStore store) {
-        if (store.contains(KEY_PROFILES)) return;
-        ArrayList<String> entries = new ArrayList<>();
-        Collections.addAll(entries, RUSSIAN_SERVICES);
-        Profile russian = new Profile(
-                "builtin_ru_bypass", "Искл. российские сервисы",
-                MODE_BYPASS, entries, true);
-        saveAll(store, Collections.singletonList(russian));
-        store.putPlain(KEY_ACTIVE, russian.id);
-        store.putBoolean(KEY_ENABLED, false);
+        if (!store.contains(KEY_PROFILES)) {
+            Profile russian = new Profile(
+                    "builtin_ru_bypass", "Искл. российские сервисы",
+                    MODE_BYPASS, builtinEntries(), true);
+            saveAll(store, Collections.singletonList(russian));
+            store.putPlain(KEY_ACTIVE, russian.id);
+            store.putBoolean(KEY_ENABLED, false);
+            store.putPlain(KEY_BUILTIN_VERSION, String.valueOf(BUILTIN_VERSION));
+            return;
+        }
+
+        int installedVersion;
+        try {
+            installedVersion = Integer.parseInt(store.getPlain(KEY_BUILTIN_VERSION, "0"));
+        } catch (NumberFormatException ignored) {
+            installedVersion = 0;
+        }
+        if (installedVersion >= BUILTIN_VERSION) return;
+
+        try {
+            JSONArray profiles = new JSONArray(store.getPlain(KEY_PROFILES, "[]"));
+            JSONObject builtIn = null;
+            for (int i = 0; i < profiles.length(); i++) {
+                JSONObject candidate = profiles.optJSONObject(i);
+                if (candidate != null && (candidate.optBoolean("built_in", false)
+                        || "builtin_ru_bypass".equals(candidate.optString("id")))) {
+                    builtIn = candidate;
+                    break;
+                }
+            }
+            if (builtIn == null) {
+                builtIn = profileJson(new Profile(
+                        "builtin_ru_bypass", "Искл. российские сервисы",
+                        MODE_BYPASS, builtinEntries(), true));
+                profiles.put(builtIn);
+            } else {
+                ArrayList<String> merged = new ArrayList<>();
+                JSONArray current = builtIn.optJSONArray("entries");
+                if (current != null) {
+                    for (int i = 0; i < current.length(); i++) {
+                        String entry = normalizeEntry(current.optString(i));
+                        if (!entry.isEmpty() && !merged.contains(entry)) merged.add(entry);
+                    }
+                }
+                for (String entry : builtinEntries()) {
+                    if (!merged.contains(entry)) merged.add(entry);
+                }
+                builtIn.put("entries", new JSONArray(normalizeEntries(merged)));
+                builtIn.put("built_in", true);
+            }
+            store.putPlain(KEY_PROFILES, profiles.toString());
+            store.putPlain(KEY_BUILTIN_VERSION, String.valueOf(BUILTIN_VERSION));
+        } catch (Exception ignored) {
+            // Keep the user's existing data untouched if it cannot be migrated safely.
+        }
     }
 
     public static boolean enabled(SecureStore store) {
@@ -250,20 +386,46 @@ public final class SplitTunnel {
         Profile profile = active(store);
         if (profile == null) throw new IllegalStateException("Не выбран список маршрутов");
         LinkedHashMap<String, Cidr> resolved = new LinkedHashMap<>();
+        int workers = Math.max(1, Math.min(8, profile.entries.size()));
+        ExecutorService resolver = Executors.newFixedThreadPool(workers);
+        ArrayList<Future<List<Cidr>>> futures = new ArrayList<>();
         for (String entry : profile.entries) {
-            try {
-                for (Cidr cidr : resolveEntry(entry)) {
-                    resolved.put(cidr.address() + "/" + cidr.prefix, cidr);
-                    if (resolved.size() >= MAX_ROUTES) break;
-                }
-            } catch (Exception ignored) {
-            }
-            if (resolved.size() >= MAX_ROUTES) break;
+            futures.add(resolver.submit(() -> resolveEntry(entry)));
         }
-        ArrayList<Cidr> routes = new ArrayList<>(resolved.values());
-        routes.sort(Comparator.comparingInt((Cidr value) -> value.prefix)
-                .thenComparingLong(value -> value.network & 0xffffffffL));
+        try {
+            for (Future<List<Cidr>> future : futures) {
+                try {
+                    for (Cidr cidr : future.get()) {
+                        resolved.put(cidr.address() + "/" + cidr.prefix, cidr);
+                        if (resolved.size() >= MAX_ROUTES) break;
+                    }
+                } catch (Exception ignored) {
+                }
+                if (resolved.size() >= MAX_ROUTES) break;
+            }
+        } finally {
+            resolver.shutdownNow();
+        }
+        ArrayList<Cidr> routes = compactRoutes(new ArrayList<>(resolved.values()));
         return new Routing(true, profile.mode, profile.name, routes);
+    }
+
+    private static ArrayList<Cidr> compactRoutes(List<Cidr> values) {
+        ArrayList<Cidr> sorted = new ArrayList<>(values);
+        sorted.sort(Comparator.comparingInt((Cidr value) -> value.prefix)
+                .thenComparingLong(value -> value.network & 0xffffffffL));
+        ArrayList<Cidr> compact = new ArrayList<>();
+        for (Cidr candidate : sorted) {
+            boolean covered = false;
+            for (Cidr existing : compact) {
+                if (existing.contains(candidate)) {
+                    covered = true;
+                    break;
+                }
+            }
+            if (!covered) compact.add(candidate);
+        }
+        return compact;
     }
 
     private static List<Cidr> resolveEntry(String raw) throws Exception {
@@ -326,16 +488,27 @@ public final class SplitTunnel {
         JSONArray array = new JSONArray();
         try {
             for (Profile profile : profiles) {
-                array.put(new JSONObject()
-                        .put("id", profile.id)
-                        .put("name", cleanName(profile.name))
-                        .put("mode", profile.mode)
-                        .put("entries", new JSONArray(normalizeEntries(profile.entries)))
-                        .put("built_in", profile.builtIn));
+                array.put(profileJson(profile));
             }
         } catch (Exception ignored) {
         }
         store.putPlain(KEY_PROFILES, array.toString());
+    }
+
+    private static JSONObject profileJson(Profile profile) throws Exception {
+        return new JSONObject()
+                .put("id", profile.id)
+                .put("name", cleanName(profile.name))
+                .put("mode", profile.mode)
+                .put("entries", new JSONArray(normalizeEntries(profile.entries)))
+                .put("built_in", profile.builtIn);
+    }
+
+    private static List<String> builtinEntries() {
+        ArrayList<String> entries = new ArrayList<>();
+        Collections.addAll(entries, RUSSIAN_SERVICES);
+        Collections.addAll(entries, RUSSIAN_SERVICE_PREFIXES);
+        return entries;
     }
 
     private static int toInt(InetAddress address) {

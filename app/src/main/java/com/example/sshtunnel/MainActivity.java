@@ -431,8 +431,8 @@ public class MainActivity extends Activity {
         SplitTunnel.ensureDefaults(store);
         SplitTunnel.Profile active = SplitTunnel.active(store);
         LinearLayout page = createPageContent("Раздельное туннелирование",
-                "Маршруты применяются только к VPN для всего телефона. Домены заново "
-                        + "преобразуются в IP при каждом подключении.");
+                "1. Включи функцию. 2. Выбери набор. 3. Через шестерёнку укажи, куда "
+                        + "направлять адреса. Изменения применятся после переподключения VPN.");
 
         addToggleCard(page, "Использовать раздельные маршруты",
                 "Если выключено, весь трафик работает как раньше и идёт через VPN.",

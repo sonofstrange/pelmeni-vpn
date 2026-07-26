@@ -25,6 +25,7 @@ public class TunnelService extends Service {
     private volatile boolean wanted = false;
     private volatile boolean forceReconnect = false;
     private volatile Session session;
+    private volatile Session vpnSession;
     private volatile SocksProxy telegramSocksProxy;
     private volatile SocksProxy vpnSocksProxy;
     private ConnectivityManager connectivityManager;
@@ -227,26 +228,16 @@ public class TunnelService extends Service {
 
         send("Подключение к " + host
                 + (tlsProtected ? " через защищённый TLS…" : "…"));
-        JSch jsch = new JSch();
-        Session newSession = jsch.getSession(user, host, sshPort);
-        newSession.setPassword(password);
-        newSession.setSocketFactory(tlsProtected
-                ? TlsTransport.socketFactory(store, activeUnderlyingNetwork)
-                : new LowLatencySocketFactory(activeUnderlyingNetwork));
-        newSession.setConfig("StrictHostKeyChecking", "no");
-        newSession.setConfig("PreferredAuthentications", "password,keyboard-interactive");
-        newSession.setConfig("cipher.c2s",
-                "aes128-gcm@openssh.com,aes128-ctr,aes256-gcm@openssh.com,aes256-ctr");
-        newSession.setConfig("cipher.s2c",
-                "aes128-gcm@openssh.com,aes128-ctr,aes256-gcm@openssh.com,aes256-ctr");
-        newSession.setConfig("max_input_buffer_size", Integer.toString(windowSize));
-        newSession.setServerAliveInterval(10_000);
-        newSession.setServerAliveCountMax(2);
-        newSession.setTimeout(15_000);
-        newSession.connect(15_000);
+        Session newSession = connectSession(
+                store, host, user, password, sshPort, tlsProtected, windowSize);
+        Session newVpnSession = null;
         SocksProxy newTelegramProxy = null;
         SocksProxy newVpnProxy = null;
         try {
+            if (telegramEnabled && vpnEnabled) {
+                newVpnSession = connectSession(
+                        store, host, user, password, sshPort, tlsProtected, windowSize);
+            }
             if (telegramEnabled) {
                 newTelegramProxy = new SocksProxy(
                         newSession, telegramPort, windowSize, packetSize);
@@ -254,12 +245,14 @@ public class TunnelService extends Service {
             }
             if (vpnEnabled) {
                 newVpnProxy = new SocksProxy(
-                        newSession, vpnPort, windowSize, packetSize);
+                        newVpnSession == null ? newSession : newVpnSession,
+                        vpnPort, windowSize, packetSize);
                 newVpnProxy.start();
             }
             if (!wanted || forceReconnect) throw new JSchException("reconnect requested");
 
             session = newSession;
+            vpnSession = newVpnSession;
             telegramSocksProxy = newTelegramProxy;
             vpnSocksProxy = newVpnProxy;
             connected = true;
@@ -267,17 +260,44 @@ public class TunnelService extends Service {
             if (newTelegramProxy != null) newTelegramProxy.close();
             if (newVpnProxy != null) newVpnProxy.close();
             newSession.disconnect();
+            if (newVpnSession != null) newVpnSession.disconnect();
             throw error;
         }
 
         send("Подключено · " + TunnelMode.portsLabel(store));
     }
 
+    private Session connectSession(
+            SecureStore store, String host, String user, String password,
+            int sshPort, boolean tlsProtected, int windowSize) throws Exception {
+        Session result = new JSch().getSession(user, host, sshPort);
+        result.setPassword(password);
+        result.setSocketFactory(tlsProtected
+                ? TlsTransport.socketFactory(store, activeUnderlyingNetwork)
+                : new LowLatencySocketFactory(activeUnderlyingNetwork));
+        result.setConfig("StrictHostKeyChecking", "no");
+        result.setConfig("PreferredAuthentications", "password,keyboard-interactive");
+        result.setConfig("cipher.c2s",
+                "aes128-gcm@openssh.com,aes128-ctr,aes256-gcm@openssh.com,aes256-ctr");
+        result.setConfig("cipher.s2c",
+                "aes128-gcm@openssh.com,aes128-ctr,aes256-gcm@openssh.com,aes256-ctr");
+        result.setConfig("max_input_buffer_size", Integer.toString(windowSize));
+        result.setServerAliveInterval(10_000);
+        result.setServerAliveCountMax(2);
+        result.setTimeout(15_000);
+        result.connect(15_000);
+        return result;
+    }
+
     private void monitorConnection() throws Exception {
         while (wanted && !forceReconnect) {
             Session current = session;
+            Session currentVpn = vpnSession;
             if (current == null || !current.isConnected()) {
                 throw new Exception("session disconnected");
+            }
+            if (currentVpn != null && !currentVpn.isConnected()) {
+                throw new Exception("VPN session disconnected");
             }
             SocksProxy telegramProxy = telegramSocksProxy;
             SocksProxy vpnProxy = vpnSocksProxy;
@@ -335,6 +355,7 @@ public class TunnelService extends Service {
                     .putExtra("debug_status", currentStatus)
                     .putExtra("debug_ssh_connected",
                             currentSession != null && currentSession.isConnected())
+                    .putExtra("debug_ssh_sessions", vpnSession == null ? 1 : 2)
                     .putExtra("debug_ssh_endpoint", configuredHost + ":"
                             + parsePort(store.getPlain("port", "22"), 22))
                     .putExtra("debug_transport", tlsEnabled
@@ -414,9 +435,14 @@ public class TunnelService extends Service {
         collectAndClose(telegramProxy);
         collectAndClose(vpnProxy);
         Session current = session;
+        Session currentVpn = vpnSession;
         session = null;
+        vpnSession = null;
         if (current != null) {
             try { current.disconnect(); } catch (Exception ignored) {}
+        }
+        if (currentVpn != null) {
+            try { currentVpn.disconnect(); } catch (Exception ignored) {}
         }
     }
 

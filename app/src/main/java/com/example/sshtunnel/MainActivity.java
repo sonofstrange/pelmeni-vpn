@@ -1890,6 +1890,7 @@ public class MainActivity extends Activity {
                     + "\nSSH: "
                     + (intent.getBooleanExtra("debug_ssh_connected", false)
                     ? "соединение установлено" : "нет соединения")
+                    + " · сеансов: " + intent.getIntExtra("debug_ssh_sessions", 1)
                     + "\nАдрес: " + intent.getStringExtra("debug_ssh_endpoint")
                     + "\nТранспорт: " + intent.getStringExtra("debug_transport")
                     + "\nРежим: " + intent.getStringExtra("debug_mode")

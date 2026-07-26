@@ -28,7 +28,7 @@ public final class SplitTunnel {
     private static final String KEY_ACTIVE = "split_active";
     private static final String KEY_ENABLED = "split_enabled";
     private static final String KEY_BUILTIN_VERSION = "split_builtin_version";
-    private static final int BUILTIN_VERSION = 2;
+    private static final int BUILTIN_VERSION = 3;
     private static final int MAX_ENTRIES = 512;
     private static final int MAX_ROUTES = 8192;
 
@@ -39,10 +39,14 @@ public final class SplitTunnel {
             "vk.com", "vk.ru", "vk.me", "vkontakte.ru", "userapi.com",
             "vkuseraudio.net", "vk-cdn.net", "vk-portal.net", "vkuser.net",
             "mail.ru", "imgsmail.ru", "mycdn.me", "ok.ru", "odnoklassniki.ru",
-            "gosuslugi.ru", "esia.gosuslugi.ru", "government.ru", "kremlin.ru",
+            "gosuslugi.ru", "lk.gosuslugi.ru", "esia.gosuslugi.ru",
+            "static.gosuslugi.ru", "oplata.gosuslugi.ru", "partners.gosuslugi.ru",
+            "gu-st.ru", "government.ru", "kremlin.ru",
             "mos.ru", "mosreg.ru", "nalog.ru", "nalog.gov.ru", "sfr.gov.ru",
             "rosreestr.gov.ru", "fssp.gov.ru",
-            "ozon.ru", "ozon.travel", "ozonusercontent.com", "ozoncdn.com",
+            "ozon.ru", "www.ozon.ru", "api.ozon.ru", "xapi.ozon.ru",
+            "m.ozon.ru", "id.ozon.ru", "pay.ozon.ru", "ozon.travel",
+            "ozonusercontent.com", "ozoncdn.com",
             "wildberries.ru", "wb.ru", "wbbasket.ru", "avito.ru", "avito.st",
             "avcdn.net", "cian.ru", "vkusvill.ru", "megamarket.ru",
             "dns-shop.ru", "citilink.ru", "mvideo.ru", "eldorado.ru",
@@ -76,6 +80,8 @@ public final class SplitTunnel {
     private static final String[] RUSSIAN_SERVICE_PREFIXES = {
             "5.45.192.0/18", "5.61.16.0/21", "5.61.232.0/21", "5.101.40.0/22",
             "5.181.60.0/22", "5.188.140.0/22", "5.255.192.0/18",
+            "109.207.0.0/20", "185.13.160.0/24", "185.71.64.0/22",
+            "185.121.243.0/24", "193.84.78.0/24", "193.84.90.0/24",
             "31.177.104.0/22", "37.9.64.0/18", "37.139.32.0/22",
             "37.139.40.0/22", "37.140.128.0/18", "45.84.128.0/22",
             "45.136.20.0/22", "46.226.122.0/24", "62.217.160.0/20",

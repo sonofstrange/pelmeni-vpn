@@ -14,6 +14,8 @@ import android.content.IntentFilter;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.net.VpnService;
 import android.graphics.drawable.Icon;
 import android.text.InputType;
@@ -67,6 +69,8 @@ public class MainActivity extends Activity {
     private volatile boolean serverSetupRunning;
     private volatile boolean updateCheckRunning;
     private final ExecutorService speedWorker = Executors.newSingleThreadExecutor();
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final Object splitRestartToken = new Object();
 
     private final BroadcastReceiver receiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
@@ -432,17 +436,13 @@ public class MainActivity extends Activity {
         SplitTunnel.Profile active = SplitTunnel.active(store);
         LinearLayout page = createPageContent("Раздельное туннелирование",
                 "1. Включи функцию. 2. Выбери набор. 3. Через шестерёнку укажи, куда "
-                        + "направлять адреса. Изменения применятся после переподключения VPN.");
+                        + "направлять адреса. Работающий VPN переподключится автоматически.");
 
         addToggleCard(page, "Использовать раздельные маршруты",
                 "Если выключено, весь трафик работает как раньше и идёт через VPN.",
                 SplitTunnel.enabled(store), checked -> {
                     SplitTunnel.setEnabled(store, checked);
-                    updateSplitSummary();
-                    Toast.makeText(this, running
-                                    ? "Изменение применится при следующем подключении"
-                                    : "Настройка сохранена",
-                            Toast.LENGTH_SHORT).show();
+                    applySplitTunnelChanges();
                 });
 
         if (active != null) {
@@ -471,7 +471,7 @@ public class MainActivity extends Activity {
             row.setFocusable(true);
             row.setOnClickListener(v -> {
                 SplitTunnel.activate(store, profile.id);
-                updateSplitSummary();
+                applySplitTunnelChanges();
                 showSplitTunnelPage();
             });
 
@@ -613,7 +613,7 @@ public class MainActivity extends Activity {
                     : new SplitTunnel.Profile(profile.id, name.getText().toString().trim(),
                     selectedMode, values, profile.builtIn);
             SplitTunnel.saveAndActivate(store, updated);
-            updateSplitSummary();
+            applySplitTunnelChanges();
             showSplitTunnelPage();
             Toast.makeText(this, "Набор сохранён", Toast.LENGTH_SHORT).show();
         });
@@ -627,7 +627,7 @@ public class MainActivity extends Activity {
                     .setTitle("Удалить набор «" + profile.name + "»?")
                     .setPositiveButton("Удалить", (ignored, which) -> {
                         SplitTunnel.delete(store, profile.id);
-                        updateSplitSummary();
+                        applySplitTunnelChanges();
                         showSplitTunnelPage();
                     })
                     .setNegativeButton("Отмена", null)
@@ -651,6 +651,29 @@ public class MainActivity extends Activity {
                 (SplitTunnel.MODE_ONLY.equals(active.mode)
                         ? "Только через VPN: " : "Не через VPN: ")
                         + active.name + " · " + active.entries.size());
+    }
+
+    private void applySplitTunnelChanges() {
+        updateSplitSummary();
+        mainHandler.removeCallbacksAndMessages(splitRestartToken);
+        if (!running || !enableVpn.isChecked()) {
+            Toast.makeText(this, "Настройка сохранена", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        startService(new Intent(this, VpnTunnelService.class)
+                .setAction(VpnTunnelService.STOP)
+                .putExtra(VpnTunnelService.EXTRA_STOP_SSH, false));
+        Runnable restart = () -> {
+            if (!running || !enableVpn.isChecked()) return;
+            Intent start = new Intent(this, VpnTunnelService.class)
+                    .setAction(VpnTunnelService.START);
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(start);
+            else startService(start);
+        };
+        mainHandler.postAtTime(restart, splitRestartToken,
+                android.os.SystemClock.uptimeMillis() + 700);
+        Toast.makeText(this, "Применяем маршруты: VPN переподключается…",
+                Toast.LENGTH_SHORT).show();
     }
 
     private void beginSplitExport() {
@@ -707,7 +730,7 @@ public class MainActivity extends Activity {
                         "Импортированный список", SplitTunnel.MODE_BYPASS, entries);
             }
             SplitTunnel.saveAndActivate(new SecureStore(this), profile);
-            updateSplitSummary();
+            applySplitTunnelChanges();
             showSplitTunnelPage();
             Toast.makeText(this, "Набор импортирован", Toast.LENGTH_SHORT).show();
         } catch (Exception error) {

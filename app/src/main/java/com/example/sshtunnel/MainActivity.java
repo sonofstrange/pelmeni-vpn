@@ -70,7 +70,6 @@ public class MainActivity extends Activity {
     private volatile boolean updateCheckRunning;
     private final ExecutorService speedWorker = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
-    private final Object splitRestartToken = new Object();
 
     private final BroadcastReceiver receiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
@@ -660,24 +659,18 @@ public class MainActivity extends Activity {
 
     private void applySplitTunnelChanges() {
         updateSplitSummary();
-        mainHandler.removeCallbacksAndMessages(splitRestartToken);
-        if (!running || !enableVpn.isChecked()) {
+        SecureStore store = new SecureStore(this);
+        if (!store.getBoolean("enabled", false)
+                || !store.getBoolean("vpn_mode", false)) {
             Toast.makeText(this, "Настройка сохранена", Toast.LENGTH_SHORT).show();
             return;
         }
-        startService(new Intent(this, VpnTunnelService.class)
-                .setAction(VpnTunnelService.STOP)
-                .putExtra(VpnTunnelService.EXTRA_STOP_SSH, false));
-        Runnable restart = () -> {
-            if (!running || !enableVpn.isChecked()) return;
-            Intent start = new Intent(this, VpnTunnelService.class)
-                    .setAction(VpnTunnelService.START);
-            if (Build.VERSION.SDK_INT >= 26) startForegroundService(start);
-            else startService(start);
-        };
-        mainHandler.postAtTime(restart, splitRestartToken,
-                android.os.SystemClock.uptimeMillis() + 700);
-        Toast.makeText(this, "Применяем маршруты: VPN переподключается…",
+        Intent reload = VpnTunnelService.includeRoutingSnapshot(
+                new Intent(this, VpnTunnelService.class)
+                        .setAction(VpnTunnelService.RELOAD_ROUTES), store);
+        if (Build.VERSION.SDK_INT >= 26) startForegroundService(reload);
+        else startService(reload);
+        Toast.makeText(this, "Применяем маршруты…",
                 Toast.LENGTH_SHORT).show();
     }
 
@@ -2062,7 +2055,9 @@ public class MainActivity extends Activity {
         Intent sshIntent = new Intent(this, TunnelService.class).setAction(TunnelService.START);
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(sshIntent);
         else startService(sshIntent);
-        Intent vpnIntent = new Intent(this, VpnTunnelService.class).setAction(VpnTunnelService.START);
+        Intent vpnIntent = VpnTunnelService.includeRoutingSnapshot(
+                new Intent(this, VpnTunnelService.class)
+                        .setAction(VpnTunnelService.START), new SecureStore(this));
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(vpnIntent);
         else startService(vpnIntent);
         update("Starting VPN...");

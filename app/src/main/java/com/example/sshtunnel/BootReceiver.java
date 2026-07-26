@@ -15,7 +15,9 @@ public class BootReceiver extends BroadcastReceiver {
         if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(service);
         else context.startService(service);
         if (store.getBoolean("vpn_mode", false)) {
-            Intent vpn = new Intent(context, VpnTunnelService.class).setAction(VpnTunnelService.START);
+            Intent vpn = VpnTunnelService.includeRoutingSnapshot(
+                    new Intent(context, VpnTunnelService.class)
+                            .setAction(VpnTunnelService.START), store);
             if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(vpn);
             else context.startService(vpn);
         }

@@ -16,6 +16,7 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -23,7 +24,13 @@ import java.util.concurrent.Executors;
 public class VpnTunnelService extends VpnService {
     public static final String START = "vpn_start";
     public static final String STOP = "vpn_stop";
+    public static final String RELOAD_ROUTES = "vpn_reload_routes";
     public static final String EXTRA_STOP_SSH = "stop_ssh";
+    private static final String EXTRA_SPLIT_SNAPSHOT = "split_snapshot";
+    private static final String EXTRA_SPLIT_ENABLED = "split_enabled";
+    private static final String EXTRA_SPLIT_MODE = "split_mode";
+    private static final String EXTRA_SPLIT_NAME = "split_name";
+    private static final String EXTRA_SPLIT_ENTRIES = "split_entries";
     private static final String CHANNEL = "tunnel";
     private static final int ID = 42;
 
@@ -38,11 +45,57 @@ public class VpnTunnelService extends VpnService {
             stopVpn(intent.getBooleanExtra(EXTRA_STOP_SSH, true));
             return START_NOT_STICKY;
         }
-        if (tun == null && !starting) startVpn();
+        if (intent != null && RELOAD_ROUTES.equals(intent.getAction())) {
+            reloadRoutes(readRoutingSnapshot(intent));
+            return START_STICKY;
+        }
+        if (tun == null && !starting) startVpn(readRoutingSnapshot(intent));
         return START_STICKY;
     }
 
-    private void startVpn() {
+    public static Intent includeRoutingSnapshot(Intent intent, SecureStore store) {
+        boolean enabled = SplitTunnel.enabled(store);
+        SplitTunnel.Profile profile = SplitTunnel.active(store);
+        intent.putExtra(EXTRA_SPLIT_SNAPSHOT, true)
+                .putExtra(EXTRA_SPLIT_ENABLED, enabled);
+        if (profile != null) {
+            intent.putExtra(EXTRA_SPLIT_MODE, profile.mode)
+                    .putExtra(EXTRA_SPLIT_NAME, profile.name)
+                    .putStringArrayListExtra(EXTRA_SPLIT_ENTRIES,
+                            new ArrayList<>(profile.entries));
+        }
+        return intent;
+    }
+
+    private RoutingSnapshot readRoutingSnapshot(Intent intent) {
+        if (intent == null || !intent.getBooleanExtra(EXTRA_SPLIT_SNAPSHOT, false)) {
+            return null;
+        }
+        ArrayList<String> entries = intent.getStringArrayListExtra(EXTRA_SPLIT_ENTRIES);
+        SplitTunnel.Profile profile = entries == null ? null : SplitTunnel.create(
+                intent.getStringExtra(EXTRA_SPLIT_NAME),
+                intent.getStringExtra(EXTRA_SPLIT_MODE), entries);
+        return new RoutingSnapshot(
+                intent.getBooleanExtra(EXTRA_SPLIT_ENABLED, false), profile);
+    }
+
+    private void reloadRoutes(RoutingSnapshot snapshot) {
+        starting = true;
+        startAsForeground("VPN: применяем маршруты…");
+        worker.execute(() -> {
+            if (stopping) return;
+            cleanupNative();
+            int socksPort = TunnelMode.vpnSocksPort(new SecureStore(this));
+            if (!waitForSocks(socksPort)) {
+                send("SOCKS5 не запустился — VPN остановлен");
+                stopVpn(true);
+                return;
+            }
+            establishVpn(socksPort, snapshot);
+        });
+    }
+
+    private void startVpn(RoutingSnapshot snapshot) {
         starting = true;
         startAsForeground("VPN: ожидание SSH-туннеля…");
         worker.execute(() -> {
@@ -52,15 +105,17 @@ public class VpnTunnelService extends VpnService {
                 stopVpn(true);
                 return;
             }
-            establishVpn(socksPort);
+            establishVpn(socksPort, snapshot);
         });
     }
 
-    private void establishVpn(int socksPort) {
+    private void establishVpn(int socksPort, RoutingSnapshot snapshot) {
         try {
             SecureStore store = new SecureStore(this);
             int mtu = NetworkTuning.vpnMtu(store);
-            SplitTunnel.Routing routing = SplitTunnel.resolve(store);
+            SplitTunnel.Routing routing = snapshot == null
+                    ? SplitTunnel.resolve(store)
+                    : SplitTunnel.resolve(snapshot.enabled, snapshot.profile);
             VpnService.Builder builder = new VpnService.Builder()
                     .setSession(Branding.appName(this))
                     .setMtu(mtu)
@@ -203,5 +258,15 @@ public class VpnTunnelService extends VpnService {
                 .setPackage(getPackageName())
                 .putExtra("status", text));
         getSystemService(NotificationManager.class).notify(ID, notification(text));
+    }
+
+    private static final class RoutingSnapshot {
+        final boolean enabled;
+        final SplitTunnel.Profile profile;
+
+        RoutingSnapshot(boolean enabled, SplitTunnel.Profile profile) {
+            this.enabled = enabled;
+            this.profile = profile;
+        }
     }
 }

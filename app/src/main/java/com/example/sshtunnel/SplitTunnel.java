@@ -386,10 +386,13 @@ public final class SplitTunnel {
 
     public static Routing resolve(SecureStore store) throws Exception {
         ensureDefaults(store);
-        if (!enabled(store)) {
+        return resolve(enabled(store), active(store));
+    }
+
+    public static Routing resolve(boolean enabled, Profile profile) throws Exception {
+        if (!enabled) {
             return new Routing(false, MODE_BYPASS, "", Collections.emptyList());
         }
-        Profile profile = active(store);
         if (profile == null) throw new IllegalStateException("Не выбран список маршрутов");
         LinkedHashMap<String, Cidr> resolved = new LinkedHashMap<>();
         int workers = Math.max(1, Math.min(8, profile.entries.size()));

@@ -34,7 +34,9 @@ public class QuickSettingsTileService extends TileService {
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(ssh);
         else startService(ssh);
         if (store.getBoolean("vpn_mode", false)) {
-            Intent vpn = new Intent(this, VpnTunnelService.class).setAction(VpnTunnelService.START);
+            Intent vpn = VpnTunnelService.includeRoutingSnapshot(
+                    new Intent(this, VpnTunnelService.class)
+                            .setAction(VpnTunnelService.START), store);
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(vpn);
             else startService(vpn);
         }

@@ -458,6 +458,11 @@ public class MainActivity extends Activity {
                             ? "Через VPN только адреса из списка"
                             : "Через VPN всё, кроме адресов из списка")
                             + " · " + active.entries.size() + " записей");
+            if (SplitTunnel.isBrawlTest(active)) {
+                addCardSubtitle(current,
+                        "Проверка: остальные сайты должны видеть VPN, а Brawl Stars — "
+                                + "подключаться напрямую и не запускаться без VPN.");
+            }
             page.addView(current, pageCardParams());
         }
 

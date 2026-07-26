@@ -28,7 +28,9 @@ public final class SplitTunnel {
     private static final String KEY_ACTIVE = "split_active";
     private static final String KEY_ENABLED = "split_enabled";
     private static final String KEY_BUILTIN_VERSION = "split_builtin_version";
-    private static final int BUILTIN_VERSION = 3;
+    private static final String BUILTIN_RUSSIAN_ID = "builtin_ru_bypass";
+    private static final String BUILTIN_BRAWL_TEST_ID = "builtin_brawl_test";
+    private static final int BUILTIN_VERSION = 5;
     private static final int MAX_ENTRIES = 512;
     private static final int MAX_ROUTES = 8192;
 
@@ -138,6 +140,19 @@ public final class SplitTunnel {
             "217.174.188.0/22"
     };
 
+    /**
+     * Diagnostic bypass captured from the installed Brawl Stars build. The EC2
+     * range contains the observed game connection on TCP 9339; the domains are
+     * official Supercell properties used for login and game content.
+     */
+    private static final String[] BRAWL_TEST_ENTRIES = {
+            "brawlstars.com", "supercell.com", "supercellid.com",
+            "id.supercell.com", "accounts.supercell.com",
+            "proxy.social.supercell.com", "assets.social.supercell.com",
+            "ingame-webviews.supercell.com",
+            "44.224.0.0/11", "52.32.0.0/14"
+    };
+
     private SplitTunnel() {
     }
 
@@ -213,9 +228,15 @@ public final class SplitTunnel {
     public static void ensureDefaults(SecureStore store) {
         if (!store.contains(KEY_PROFILES)) {
             Profile russian = new Profile(
-                    "builtin_ru_bypass", "Искл. российские сервисы",
+                    BUILTIN_RUSSIAN_ID, "Искл. российские сервисы",
                     MODE_BYPASS, builtinEntries(), true);
-            saveAll(store, Collections.singletonList(russian));
+            Profile brawlTest = new Profile(
+                    BUILTIN_BRAWL_TEST_ID, "ТЕСТ · Brawl Stars без VPN",
+                    MODE_BYPASS, brawlTestEntries(), true);
+            ArrayList<Profile> defaults = new ArrayList<>();
+            defaults.add(russian);
+            defaults.add(brawlTest);
+            saveAll(store, defaults);
             store.putPlain(KEY_ACTIVE, russian.id);
             store.putBoolean(KEY_ENABLED, false);
             store.putPlain(KEY_BUILTIN_VERSION, String.valueOf(BUILTIN_VERSION));
@@ -232,35 +253,10 @@ public final class SplitTunnel {
 
         try {
             JSONArray profiles = new JSONArray(store.getPlain(KEY_PROFILES, "[]"));
-            JSONObject builtIn = null;
-            for (int i = 0; i < profiles.length(); i++) {
-                JSONObject candidate = profiles.optJSONObject(i);
-                if (candidate != null && (candidate.optBoolean("built_in", false)
-                        || "builtin_ru_bypass".equals(candidate.optString("id")))) {
-                    builtIn = candidate;
-                    break;
-                }
-            }
-            if (builtIn == null) {
-                builtIn = profileJson(new Profile(
-                        "builtin_ru_bypass", "Искл. российские сервисы",
-                        MODE_BYPASS, builtinEntries(), true));
-                profiles.put(builtIn);
-            } else {
-                ArrayList<String> merged = new ArrayList<>();
-                JSONArray current = builtIn.optJSONArray("entries");
-                if (current != null) {
-                    for (int i = 0; i < current.length(); i++) {
-                        String entry = normalizeEntry(current.optString(i));
-                        if (!entry.isEmpty() && !merged.contains(entry)) merged.add(entry);
-                    }
-                }
-                for (String entry : builtinEntries()) {
-                    if (!merged.contains(entry)) merged.add(entry);
-                }
-                builtIn.put("entries", new JSONArray(normalizeEntries(merged)));
-                builtIn.put("built_in", true);
-            }
+            ensureBuiltinProfile(profiles, BUILTIN_RUSSIAN_ID,
+                    "Искл. российские сервисы", builtinEntries());
+            ensureBuiltinProfile(profiles, BUILTIN_BRAWL_TEST_ID,
+                    "ТЕСТ · Brawl Stars без VPN", brawlTestEntries());
             store.putPlain(KEY_PROFILES, profiles.toString());
             store.putPlain(KEY_BUILTIN_VERSION, String.valueOf(BUILTIN_VERSION));
         } catch (Exception ignored) {
@@ -312,6 +308,10 @@ public final class SplitTunnel {
             if (profile.id.equals(activeId)) return profile;
         }
         return profiles.isEmpty() ? null : profiles.get(0);
+    }
+
+    public static boolean isBrawlTest(Profile profile) {
+        return profile != null && BUILTIN_BRAWL_TEST_ID.equals(profile.id);
     }
 
     public static Profile create(String name, String mode, List<String> entries) {
@@ -515,6 +515,42 @@ public final class SplitTunnel {
         Collections.addAll(entries, RUSSIAN_SERVICES);
         Collections.addAll(entries, RUSSIAN_SERVICE_PREFIXES);
         return entries;
+    }
+
+    private static List<String> brawlTestEntries() {
+        ArrayList<String> entries = new ArrayList<>();
+        Collections.addAll(entries, BRAWL_TEST_ENTRIES);
+        return entries;
+    }
+
+    private static void ensureBuiltinProfile(
+            JSONArray profiles, String id, String name, List<String> additions) throws Exception {
+        JSONObject builtIn = null;
+        for (int i = 0; i < profiles.length(); i++) {
+            JSONObject candidate = profiles.optJSONObject(i);
+            if (candidate != null && id.equals(candidate.optString("id"))) {
+                builtIn = candidate;
+                break;
+            }
+        }
+        if (builtIn == null) {
+            profiles.put(profileJson(new Profile(
+                    id, name, MODE_BYPASS, additions, true)));
+            return;
+        }
+        ArrayList<String> merged = new ArrayList<>();
+        JSONArray current = builtIn.optJSONArray("entries");
+        if (current != null) {
+            for (int i = 0; i < current.length(); i++) {
+                String entry = normalizeEntry(current.optString(i));
+                if (!entry.isEmpty() && !merged.contains(entry)) merged.add(entry);
+            }
+        }
+        for (String entry : additions) {
+            if (!merged.contains(entry)) merged.add(entry);
+        }
+        builtIn.put("entries", new JSONArray(normalizeEntries(merged)));
+        builtIn.put("built_in", true);
     }
 
     private static int toInt(InetAddress address) {

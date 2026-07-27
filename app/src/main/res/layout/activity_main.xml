@@ -63,16 +63,15 @@
 
             <LinearLayout
                 android:layout_width="match_parent"
-                android:layout_height="156dp"
+                android:layout_height="143dp"
                 android:layout_marginTop="16dp"
                 android:gravity="center"
                 android:orientation="horizontal">
 
                 <Button
                     android:id="@+id/toggleTelegram"
-                    android:layout_width="0dp"
-                    android:layout_height="148dp"
-                    android:layout_weight="1"
+                    android:layout_width="135dp"
+                    android:layout_height="135dp"
                     android:background="@drawable/connect_button_background"
                     android:gravity="center"
                     android:padding="12dp"
@@ -83,10 +82,9 @@
 
                 <Button
                     android:id="@+id/toggleVpn"
-                    android:layout_width="0dp"
-                    android:layout_height="148dp"
+                    android:layout_width="135dp"
+                    android:layout_height="135dp"
                     android:layout_marginStart="10dp"
-                    android:layout_weight="1"
                     android:background="@drawable/connect_button_background"
                     android:gravity="center"
                     android:padding="12dp"
@@ -128,10 +126,18 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Куда направлять трафик"
+                    android:text="Раздельное туннелирование"
                     android:textColor="#F1F2F4"
                     android:textSize="17sp"
                     android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="5dp"
+                    android:text="Выбери, какие сайты должны идти через VPN, а какие — напрямую."
+                    android:textColor="#8F949F"
+                    android:textSize="13sp" />
 
                 <CheckBox
                     android:id="@+id/enableVpn"
@@ -177,13 +183,13 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="14dp"
-                    android:text="РАЗДЕЛЬНОЕ ТУННЕЛИРОВАНИЕ" />
+                    android:text="НАСТРОИТЬ МАРШРУТЫ" />
 
                 <TextView
                     android:id="@+id/splitTunnelSummary"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:gravity="center"
+                    android:gravity="start"
                     android:paddingTop="4dp"
                     android:text="Выключено · весь трафик через VPN"
                     android:textColor="#8F949F"

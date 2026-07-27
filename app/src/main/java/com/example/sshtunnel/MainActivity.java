@@ -1,6 +1,9 @@
 package com.example.sshtunnel;
 
 import android.Manifest;
+import android.animation.ObjectAnimator;
+import android.animation.PropertyValuesHolder;
+import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.StatusBarManager;
@@ -23,7 +26,6 @@ import android.graphics.drawable.Icon;
 import android.text.InputType;
 import android.view.View;
 import android.view.animation.DecelerateInterpolator;
-import android.view.animation.OvershootInterpolator;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
@@ -81,8 +83,11 @@ public class MainActivity extends Activity {
     private View navHome, navPeople, navSettings, navAdd;
     private View activePage;
     private boolean running;
-    private Boolean lastProxyActive;
-    private Boolean lastVpnActive;
+    private boolean proxyConnecting;
+    private boolean vpnConnecting;
+    private boolean waitingForVpnReady;
+    private ObjectAnimator proxyConnectingAnimator;
+    private ObjectAnimator vpnConnectingAnimator;
     private boolean receiverRegistered;
     private boolean suppressModeChanges;
     private boolean pendingLiveVpnPermission;
@@ -293,37 +298,53 @@ public class MainActivity extends Activity {
                     + (managed.monthlyMb > 0 ? " / " + managed.monthlyMb + " МБ" : "")
                     + "\nЛимиты: " + daily + " · " + monthly + " · " + speed);
             LinearLayout actions = new LinearLayout(this);
-            actions.setOrientation(LinearLayout.HORIZONTAL);
-            Button details = new Button(this);
-            details.setText("СТАТУС");
-            details.setOnClickListener(v -> showManagedUserStatus(managed));
-            actions.addView(details, new LinearLayout.LayoutParams(0, dp(48), 1));
-            Button code = new Button(this);
-            code.setText("QR");
-            code.setOnClickListener(v -> showAccessCode(managed));
-            LinearLayout.LayoutParams codeParams =
-                    new LinearLayout.LayoutParams(0, dp(48), 1);
-            codeParams.leftMargin = dp(4);
-            actions.addView(code, codeParams);
-            Button extend = new Button(this);
-            extend.setText("ПРОДЛИТЬ");
-            extend.setOnClickListener(v -> showExtendManagedUser(managed));
-            LinearLayout.LayoutParams middle = new LinearLayout.LayoutParams(0, dp(48), 1);
-            middle.leftMargin = dp(4);
-            actions.addView(extend, middle);
-            Button revoke = new Button(this);
-            revoke.setText("ОТОЗВАТЬ");
-            revoke.setTextColor(0xFFFF7272);
-            revoke.setOnClickListener(v -> confirmRevokeManagedUser(managed));
-            LinearLayout.LayoutParams last = new LinearLayout.LayoutParams(0, dp(48), 1);
-            last.leftMargin = dp(4);
-            actions.addView(revoke, last);
+            actions.setOrientation(LinearLayout.VERTICAL);
+            actions.setPadding(0, dp(10), 0, 0);
+            LinearLayout primary = createUserActionRow();
+            addUserAction(primary, "СТАТУС И ТРАФИК", false,
+                    () -> showManagedUserStatus(managed), false);
+            addUserAction(primary, "КОД И QR", false,
+                    () -> showAccessCode(managed), true);
+            actions.addView(primary);
+            LinearLayout secondary = createUserActionRow();
+            secondary.setPadding(0, dp(8), 0, 0);
+            addUserAction(secondary, "ПРОДЛИТЬ", false,
+                    () -> showExtendManagedUser(managed), false);
+            addUserAction(secondary, "ОТОЗВАТЬ", true,
+                    () -> confirmRevokeManagedUser(managed), true);
+            actions.addView(secondary);
             card.addView(actions);
             page.addView(card, pageCardParams());
         }
         addPageAction(page, "Обновить список", "Получить актуальные данные с сервера",
                 this::loadManagedUsers);
         showScrollablePage(page, navPeople);
+    }
+
+    private LinearLayout createUserActionRow() {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        return row;
+    }
+
+    private void addUserAction(
+            LinearLayout row, String label, boolean danger,
+            Runnable action, boolean addLeftMargin) {
+        TextView button = new TextView(this);
+        button.setText(label);
+        button.setTextColor(danger ? 0xFFFF7272 : 0xFFE8EAF0);
+        button.setTextSize(13);
+        button.setTypeface(null, android.graphics.Typeface.BOLD);
+        button.setGravity(android.view.Gravity.CENTER);
+        button.setPadding(dp(8), dp(10), dp(8), dp(10));
+        button.setBackgroundResource(R.drawable.settings_action_background);
+        button.setClickable(true);
+        button.setFocusable(true);
+        button.setOnClickListener(v -> action.run());
+        LinearLayout.LayoutParams params =
+                new LinearLayout.LayoutParams(0, dp(52), 1);
+        if (addLeftMargin) params.leftMargin = dp(8);
+        row.addView(button, params);
     }
 
     private String managedUserState(ServerAccessManager.ManagedUser managed) {
@@ -365,10 +386,6 @@ public class MainActivity extends Activity {
     }
 
     private void loadManagedUsers() {
-        if (running) {
-            showPeoplePage(null, "Сначала отключи VPN и Telegram-прокси.");
-            return;
-        }
         speedWorker.execute(() -> {
             try {
                 List<ServerAccessManager.ManagedUser> users =
@@ -382,10 +399,6 @@ public class MainActivity extends Activity {
     }
 
     private void showAddServerChoice() {
-        if (running) {
-            Toast.makeText(this, "Сначала отключи туннель", Toast.LENGTH_SHORT).show();
-            return;
-        }
         LinearLayout page = createPageContent("Добавить сервер",
                 "Выбери, как ты хочешь подключиться.");
         addPageAction(page, "Настроить свой сервер",
@@ -429,6 +442,8 @@ public class MainActivity extends Activity {
     }
 
     private void importAccessCode(String code) {
+        boolean reconnect = running;
+        if (reconnect) stopTunnel();
         try {
             ServerProfiles.Profile profile = ServerAccessCode.importCode(
                     new SecureStore(this), code);
@@ -436,16 +451,14 @@ public class MainActivity extends Activity {
             Toast.makeText(this, "Добавлен сервер «" + profile.name + "»",
                     Toast.LENGTH_LONG).show();
             showHomePage();
+            if (reconnect) toggle.postDelayed(this::startTunnel, 900);
         } catch (Exception error) {
             Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show();
+            if (reconnect) toggle.postDelayed(this::startTunnel, 900);
         }
     }
 
     private void showCreateManagedUser() {
-        if (running) {
-            Toast.makeText(this, "Сначала отключи туннель", Toast.LENGTH_SHORT).show();
-            return;
-        }
         LinearLayout page = createPageContent("Новый пользователь",
                 "У него будет отдельный SSH-доступ без пароля администратора.");
         EditText label = addServerField(page, "Имя человека", "",
@@ -1645,6 +1658,8 @@ public class MainActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        if (proxyConnectingAnimator != null) proxyConnectingAnimator.cancel();
+        if (vpnConnectingAnimator != null) vpnConnectingAnimator.cancel();
         speedWorker.shutdownNow();
         super.onDestroy();
     }
@@ -1704,44 +1719,45 @@ public class MainActivity extends Activity {
     private void updateModeButtons() {
         boolean proxyActive = running && enableTelegram.isChecked();
         boolean vpnActive = running && enableVpn.isChecked();
-        toggleTelegram.setText(proxyActive ? "ПРОКСИ\nВКЛЮЧЕН" : "ПРОКСИ\nВКЛЮЧИТЬ");
-        toggleVpn.setText(vpnActive ? "VPN\nВКЛЮЧЕН" : "VPN\nВКЛЮЧИТЬ");
+        toggleTelegram.setText(proxyConnecting
+                ? "ПРОКСИ\nПОДКЛЮЧЕНИЕ"
+                : proxyActive ? "ПРОКСИ\nВКЛЮЧЕН" : "ПРОКСИ\nВКЛЮЧИТЬ");
+        toggleVpn.setText(vpnConnecting
+                ? "VPN\nПОДКЛЮЧЕНИЕ"
+                : vpnActive ? "VPN\nВКЛЮЧЕН" : "VPN\nВКЛЮЧИТЬ");
         toggleTelegram.setTextColor(proxyActive ? 0xFFFFAA5B : 0xFFB8BBC3);
         toggleVpn.setTextColor(vpnActive ? 0xFFFFAA5B : 0xFFB8BBC3);
         toggleTelegram.setActivated(proxyActive);
         toggleVpn.setActivated(vpnActive);
-        if (lastProxyActive != null && lastProxyActive != proxyActive) {
-            animateModeButton(toggleTelegram, proxyActive);
-        }
-        if (lastVpnActive != null && lastVpnActive != vpnActive) {
-            animateModeButton(toggleVpn, vpnActive);
-        }
-        lastProxyActive = proxyActive;
-        lastVpnActive = vpnActive;
+        proxyConnectingAnimator = syncConnectingAnimation(
+                proxyConnectingAnimator, toggleTelegram,
+                proxyConnecting);
+        vpnConnectingAnimator = syncConnectingAnimation(
+                vpnConnectingAnimator, toggleVpn,
+                vpnConnecting);
     }
 
-    private void animateModeButton(Button button, boolean enabled) {
-        button.animate().cancel();
-        button.setScaleX(1f);
-        button.setScaleY(1f);
-        button.setAlpha(1f);
-        float scale = enabled ? 1.08f : 0.93f;
-        button.animate()
-                .scaleX(scale)
-                .scaleY(scale)
-                .alpha(enabled ? 0.82f : 0.68f)
-                .setDuration(120)
-                .setInterpolator(new DecelerateInterpolator())
-                .withEndAction(() -> button.animate()
-                        .scaleX(1f)
-                        .scaleY(1f)
-                        .alpha(1f)
-                        .setDuration(enabled ? 260 : 180)
-                        .setInterpolator(enabled
-                                ? new OvershootInterpolator(1.7f)
-                                : new DecelerateInterpolator())
-                        .start())
-                .start();
+    private ObjectAnimator syncConnectingAnimation(
+            ObjectAnimator animator, Button button, boolean shouldRun) {
+        if (animator == null) {
+            animator = ObjectAnimator.ofPropertyValuesHolder(button,
+                    PropertyValuesHolder.ofFloat(View.SCALE_X, 0.96f, 1.04f),
+                    PropertyValuesHolder.ofFloat(View.SCALE_Y, 0.96f, 1.04f),
+                    PropertyValuesHolder.ofFloat(View.ALPHA, 0.62f, 1f));
+            animator.setDuration(560);
+            animator.setRepeatCount(ValueAnimator.INFINITE);
+            animator.setRepeatMode(ValueAnimator.REVERSE);
+            animator.setInterpolator(new DecelerateInterpolator());
+        }
+        if (shouldRun && !animator.isStarted()) {
+            animator.start();
+        } else if (!shouldRun && animator.isStarted()) {
+            animator.cancel();
+            button.setScaleX(1f);
+            button.setScaleY(1f);
+            button.setAlpha(1f);
+        }
+        return animator;
     }
 
     private boolean saveSettings() {
@@ -1960,17 +1976,15 @@ public class MainActivity extends Activity {
             page.addView(divider, dividerParams);
         }
 
-        if (!running) {
-            Button add = new Button(this);
-            add.setText("＋  ДОБАВИТЬ СЕРВЕР");
-            add.setTextSize(15);
-            LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT);
-            addParams.topMargin = dp(22);
-            add.setOnClickListener(v -> showAddServerChoice());
-            page.addView(add, addParams);
-        }
+        Button add = new Button(this);
+        add.setText("＋  ДОБАВИТЬ СЕРВЕР");
+        add.setTextSize(15);
+        LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        addParams.topMargin = dp(22);
+        add.setOnClickListener(v -> showAddServerChoice());
+        page.addView(add, addParams);
         showScrollablePage(page, navHome);
     }
 
@@ -1994,7 +2008,7 @@ public class MainActivity extends Activity {
     }
 
     private void showServerEditor(ServerProfiles.Profile profile) {
-        if (running) {
+        if (running && profile != null) {
             Toast.makeText(this, "Сначала отключи туннель", Toast.LENGTH_SHORT).show();
             return;
         }
@@ -2187,15 +2201,22 @@ public class MainActivity extends Activity {
                             window, packet, mtu).id
                             : profile.id,
                     name, h, ssh, u, socks, window, packet, mtu);
+            boolean reconnect = running;
+            if (reconnect) stopTunnel();
             try {
                 ServerProfiles.saveAndActivate(store, updated, pw);
                 loadSettings();
                 Toast.makeText(this, "Сервер сохранён", Toast.LENGTH_SHORT).show();
                 showServerList();
-                if (!sharedAccess) maybeOfferTlsForCurrentServer(null);
+                if (reconnect) {
+                    toggle.postDelayed(this::startTunnel, 900);
+                } else if (!sharedAccess) {
+                    maybeOfferTlsForCurrentServer(null);
+                }
             } catch (Exception error) {
                 Toast.makeText(this, "Не удалось сохранить сервер",
                         Toast.LENGTH_LONG).show();
+                if (reconnect) toggle.postDelayed(this::startTunnel, 900);
             }
         });
 
@@ -2691,6 +2712,8 @@ public class MainActivity extends Activity {
         Intent intent = new Intent(this, TunnelService.class).setAction(TunnelService.START);
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent);
         else startService(intent);
+        proxyConnecting = true;
+        vpnConnecting = false;
         update("Подключение…");
     }
 
@@ -2747,10 +2770,12 @@ public class MainActivity extends Activity {
             }
         } else if (requestCode == REQUEST_VPN) {
             pendingLiveVpnPermission = false;
+            waitingForVpnReady = false;
             suppressModeChanges = true;
             enableVpn.setChecked(false);
             suppressModeChanges = false;
             new SecureStore(this).putBoolean("vpn_mode", false);
+            updateModeButtons();
         } else if (requestCode == REQUEST_EXPORT && resultCode == RESULT_OK && data != null) {
             writeConfig(data.getData());
         } else if (requestCode == REQUEST_IMPORT && resultCode == RESULT_OK && data != null) {
@@ -2765,6 +2790,9 @@ public class MainActivity extends Activity {
     }
 
     private void startVpnTunnel() {
+        waitingForVpnReady = true;
+        proxyConnecting = enableTelegram.isChecked();
+        vpnConnecting = true;
         Intent sshIntent = new Intent(this, TunnelService.class).setAction(TunnelService.START);
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(sshIntent);
         else startService(sshIntent);
@@ -2778,6 +2806,8 @@ public class MainActivity extends Activity {
 
     private void applyLiveModeChange(boolean vpnChanged, boolean checked) {
         if (!enableVpn.isChecked() && !enableTelegram.isChecked()) {
+            proxyConnecting = false;
+            vpnConnecting = false;
             if (running) stopTunnel();
             else update("Отключено");
             return;
@@ -2786,7 +2816,10 @@ public class MainActivity extends Activity {
             if (checked) startTunnel();
             return;
         }
+        if (vpnChanged) vpnConnecting = checked;
+        else proxyConnecting = checked;
         if (vpnChanged && checked) {
+            waitingForVpnReady = true;
             Intent permission = VpnService.prepare(this);
             if (permission != null) {
                 pendingLiveVpnPermission = true;
@@ -2815,7 +2848,7 @@ public class MainActivity extends Activity {
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(vpn);
             else startService(vpn);
         }
-        update("Применяем выбранные режимы…");
+        update("Переключаемся на " + TunnelMode.label(store) + "…");
     }
 
     private void stopTunnel() {
@@ -2827,11 +2860,48 @@ public class MainActivity extends Activity {
         if (text == null) return;
         status.setText(text);
         running = !text.equals("Отключено");
+        updateConnectionPhase(text);
         toggle.setText(running ? "ОТКЛЮЧИТЬ" : "ПОДКЛЮЧИТЬ");
         toggle.setActivated(running);
         updateModeButtons();
         setSettingsEnabled(!running);
         updateDebugPanel();
+    }
+
+    private void updateConnectionPhase(String text) {
+        if (text.equals("Отключено")) {
+            waitingForVpnReady = false;
+            proxyConnecting = false;
+            vpnConnecting = false;
+            return;
+        }
+        if (text.startsWith("VPN подключён")) {
+            waitingForVpnReady = false;
+            vpnConnecting = false;
+            return;
+        }
+        if (text.startsWith("Ошибка запуска VPN")
+                || text.startsWith("Android не разрешил")
+                || text.startsWith("SOCKS5 не запустился")) {
+            waitingForVpnReady = false;
+            vpnConnecting = false;
+            return;
+        }
+        if (!enableVpn.isChecked()) {
+            waitingForVpnReady = false;
+            vpnConnecting = false;
+        }
+        if (text.startsWith("Подключено")) {
+            proxyConnecting = false;
+            if (!waitingForVpnReady) vpnConnecting = false;
+            return;
+        }
+        if (text.startsWith("Подключение")
+                || text.startsWith("Сервис запущен")
+                || text.contains("Повтор через")) {
+            proxyConnecting = enableTelegram.isChecked();
+            vpnConnecting = enableVpn.isChecked();
+        }
     }
 
     private void setSettingsEnabled(boolean enabled) {

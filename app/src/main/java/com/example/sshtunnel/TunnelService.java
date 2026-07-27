@@ -184,7 +184,7 @@ public class TunnelService extends Service {
     private synchronized void reconfigureModes() {
         if (!wanted) return;
         modesChanged = true;
-        send("Применяем режимы VPN и Telegram…");
+        send("Переключаемся на " + TunnelMode.label(new SecureStore(this)) + "…");
     }
 
     private void startConnectionLoop() {

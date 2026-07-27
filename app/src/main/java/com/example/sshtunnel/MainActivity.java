@@ -264,26 +264,38 @@ public class MainActivity extends Activity {
             String monthly = managed.monthlyMb <= 0 ? "∞" : managed.monthlyMb + " МБ/месяц";
             String speed = managed.speedMbps <= 0 ? "без ограничения"
                     : managed.speedMbps + " Мбит/с";
-            addCardSubtitle(card, expiry + "\nТрафик: " + daily + " · " + monthly
-                    + "\nСкорость: " + speed);
+            String state = managedUserState(managed);
+            addCardSubtitle(card, state + " · " + expiry
+                    + "\nСегодня: " + formatBytes(managed.dayBytes)
+                    + (managed.dailyMb > 0 ? " / " + managed.dailyMb + " МБ" : "")
+                    + " · месяц: " + formatBytes(managed.monthBytes)
+                    + (managed.monthlyMb > 0 ? " / " + managed.monthlyMb + " МБ" : "")
+                    + "\nЛимиты: " + daily + " · " + monthly + " · " + speed);
             LinearLayout actions = new LinearLayout(this);
             actions.setOrientation(LinearLayout.HORIZONTAL);
+            Button details = new Button(this);
+            details.setText("СТАТУС");
+            details.setOnClickListener(v -> showManagedUserStatus(managed));
+            actions.addView(details, new LinearLayout.LayoutParams(0, dp(48), 1));
             Button code = new Button(this);
-            code.setText("КОД");
+            code.setText("QR");
             code.setOnClickListener(v -> showAccessCode(managed));
-            actions.addView(code, new LinearLayout.LayoutParams(0, dp(48), 1));
+            LinearLayout.LayoutParams codeParams =
+                    new LinearLayout.LayoutParams(0, dp(48), 1);
+            codeParams.leftMargin = dp(4);
+            actions.addView(code, codeParams);
             Button extend = new Button(this);
             extend.setText("ПРОДЛИТЬ");
             extend.setOnClickListener(v -> showExtendManagedUser(managed));
             LinearLayout.LayoutParams middle = new LinearLayout.LayoutParams(0, dp(48), 1);
-            middle.leftMargin = dp(5);
+            middle.leftMargin = dp(4);
             actions.addView(extend, middle);
             Button revoke = new Button(this);
             revoke.setText("ОТОЗВАТЬ");
             revoke.setTextColor(0xFFFF7272);
             revoke.setOnClickListener(v -> confirmRevokeManagedUser(managed));
             LinearLayout.LayoutParams last = new LinearLayout.LayoutParams(0, dp(48), 1);
-            last.leftMargin = dp(5);
+            last.leftMargin = dp(4);
             actions.addView(revoke, last);
             card.addView(actions);
             page.addView(card, pageCardParams());
@@ -291,6 +303,44 @@ public class MainActivity extends Activity {
         addPageAction(page, "Обновить список", "Получить актуальные данные с сервера",
                 this::loadManagedUsers);
         showScrollablePage(page, navPeople);
+    }
+
+    private String managedUserState(ServerAccessManager.ManagedUser managed) {
+        if (managed.expired) return "ИСТЁК";
+        if (managed.blocked) return "ЛИМИТ ИСЧЕРПАН";
+        boolean hasLimits = managed.dailyMb > 0
+                || managed.monthlyMb > 0 || managed.speedMbps > 0;
+        if (hasLimits && !managed.policyHealthy) return "ОШИБКА ЛИМИТОВ";
+        return "АКТИВЕН";
+    }
+
+    private void showManagedUserStatus(ServerAccessManager.ManagedUser managed) {
+        String checked = managed.statusUpdatedAt <= 0 ? "нет данных"
+                : android.text.format.DateFormat.getDateFormat(this).format(
+                new java.util.Date(managed.statusUpdatedAt * 1000L))
+                + " " + android.text.format.DateFormat.getTimeFormat(this).format(
+                new java.util.Date(managed.statusUpdatedAt * 1000L));
+        String message = "Статус: " + managedUserState(managed)
+                + "\nЛогин: " + managed.login
+                + "\nДействует: " + (managed.forever() ? "бессрочно" : "до " + managed.expires)
+                + "\n\nСегодня: " + formatBytes(managed.dayBytes)
+                + (managed.dailyMb > 0 ? " из " + managed.dailyMb + " МБ" : "")
+                + "\nВ этом месяце: " + formatBytes(managed.monthBytes)
+                + (managed.monthlyMb > 0 ? " из " + managed.monthlyMb + " МБ" : "")
+                + "\nОграничение скорости: "
+                + (managed.speedMbps > 0 ? managed.speedMbps + " Мбит/с" : "нет")
+                + "\n\nКонтроллер: "
+                + (managed.policyHealthy ? "работает" : "ошибка")
+                + "\nПоследняя проверка: " + checked;
+        if (!managed.policyHealthy && !managed.policyError.isEmpty()) {
+            message += "\nОшибка: " + managed.policyError;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(managed.label)
+                .setMessage(message)
+                .setPositiveButton("Обновить", (dialog, which) -> loadManagedUsers())
+                .setNegativeButton("Закрыть", null)
+                .show();
     }
 
     private void loadManagedUsers() {
@@ -1824,14 +1874,17 @@ public class MainActivity extends Activity {
             return;
         }
         SecureStore store = new SecureStore(this);
+        boolean sharedAccess = profile != null && profile.user.startsWith("pel_");
         LinearLayout page = createPageContent(
                 profile == null ? "Новый сервер" : profile.name,
                 profile == null
                         ? "Добавь данные SSH-сервера. Все параметры можно изменить позже."
+                        : sharedAccess
+                        ? "Сервер добавлен по коду. Название и параметры на этом телефоне можно менять независимо от владельца."
                         : "Настройки этого сервера. Они не влияют на остальные профили.");
 
         addSectionTitle(page, "Основное");
-        EditText profileName = addServerField(page, "Название сервера",
+        EditText profileName = addServerField(page, "Название на этом телефоне",
                 profile == null ? "" : profile.name,
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
         EditText profileHost = addServerField(page, "IP-адрес или домен",
@@ -1843,11 +1896,22 @@ public class MainActivity extends Activity {
         EditText profilePassword = addServerField(page, "Пароль SSH",
                 profile == null ? "" : ServerProfiles.password(store, profile.id),
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        if (sharedAccess) {
+            profileHost.setEnabled(false);
+            profileUser.setEnabled(false);
+            profilePassword.setEnabled(false);
+            LinearLayout shared = createCard();
+            addCardTitle(shared, "Личный профиль");
+            addCardSubtitle(shared,
+                    "Название меняется только у тебя. Адрес, логин и пароль управляются владельцем сервера.");
+            page.addView(shared, pageCardParams());
+        }
 
         addSectionTitle(page, "Порты");
         EditText profileSshPort = addServerField(page, "SSH-порт",
                 profile == null ? "22" : profile.sshPort,
                 InputType.TYPE_CLASS_NUMBER);
+        if (sharedAccess) profileSshPort.setEnabled(false);
         addQuickChoices(page, profileSshPort, "22", "443", "2222");
         EditText profileSocksPort = addServerField(page, "Локальный SOCKS5-порт",
                 profile == null ? "1080" : profile.socksPort,
@@ -1915,7 +1979,7 @@ public class MainActivity extends Activity {
             }
         });
 
-        if (profile != null) {
+        if (profile != null && !sharedAccess) {
             addSectionTitle(page, "Защита сервера");
             ServerProfiles.Profile active = ServerProfiles.active(store);
             boolean isActive = active != null && active.id.equals(profile.id);
@@ -1940,7 +2004,8 @@ public class MainActivity extends Activity {
         }
 
         Button saveProfile = new Button(this);
-        saveProfile.setText(profile == null ? "ДОБАВИТЬ СЕРВЕР" : "СОХРАНИТЬ");
+        saveProfile.setText(profile == null ? "ДОБАВИТЬ СЕРВЕР"
+                : sharedAccess ? "СОХРАНИТЬ У СЕБЯ" : "СОХРАНИТЬ");
         saveProfile.setTextSize(16);
         LinearLayout.LayoutParams saveParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, dp(58));
@@ -1991,7 +2056,7 @@ public class MainActivity extends Activity {
                 loadSettings();
                 Toast.makeText(this, "Сервер сохранён", Toast.LENGTH_SHORT).show();
                 showServerList();
-                maybeOfferTlsForCurrentServer(null);
+                if (!sharedAccess) maybeOfferTlsForCurrentServer(null);
             } catch (Exception error) {
                 Toast.makeText(this, "Не удалось сохранить сервер",
                         Toast.LENGTH_LONG).show();

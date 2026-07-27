@@ -41,9 +41,19 @@ final class ServerAccessManager {
         final long monthlyMb;
         final long speedMbps;
         final String accessCode;
+        final long dayBytes;
+        final long monthBytes;
+        final boolean blocked;
+        final boolean expired;
+        final boolean policyHealthy;
+        final String policyError;
+        final long statusUpdatedAt;
 
         ManagedUser(String label, String login, String password, String expires,
-                    long dailyMb, long monthlyMb, long speedMbps, String accessCode) {
+                    long dailyMb, long monthlyMb, long speedMbps, String accessCode,
+                    long dayBytes, long monthBytes, boolean blocked,
+                    boolean expired, boolean policyHealthy,
+                    String policyError, long statusUpdatedAt) {
             this.label = label;
             this.login = login;
             this.password = password;
@@ -52,6 +62,13 @@ final class ServerAccessManager {
             this.monthlyMb = monthlyMb;
             this.speedMbps = speedMbps;
             this.accessCode = accessCode;
+            this.dayBytes = dayBytes;
+            this.monthBytes = monthBytes;
+            this.blocked = blocked;
+            this.expired = expired;
+            this.policyHealthy = policyHealthy;
+            this.policyError = policyError;
+            this.statusUpdatedAt = statusUpdatedAt;
         }
 
         boolean forever() {
@@ -179,7 +196,14 @@ final class ServerAccessManager {
                     item.optLong("daily_mb", 0),
                     item.optLong("monthly_mb", 0),
                     item.optLong("speed_mbps", 0),
-                    item.optString("access_code", "")));
+                    item.optString("access_code", ""),
+                    item.optLong("day_bytes", 0),
+                    item.optLong("month_bytes", 0),
+                    item.optBoolean("blocked", false),
+                    item.optBoolean("expired", false),
+                    item.optBoolean("policy_healthy", false),
+                    item.optString("policy_error", ""),
+                    item.optLong("status_updated_at", 0)));
         }
         return users;
     }
@@ -247,7 +271,7 @@ final class ServerAccessManager {
 
     private static String workerPython() {
         return String.join("\n",
-                "import base64,datetime,json,os,pwd,secrets,string,subprocess,sys",
+                "import base64,datetime,json,os,pwd,secrets,string,subprocess,sys,time",
                 "path='/etc/pelmeni-vpn/users.json'",
                 "action=sys.argv[1]",
                 "req=json.loads(base64.b64decode(sys.argv[2]).decode()) if len(sys.argv)>2 and sys.argv[2] else {}",
@@ -313,9 +337,29 @@ final class ServerAccessManager {
                 "   if x.get('access_code')!=code: x['access_code']=code; changed=True",
                 "  if changed: save()",
                 " elif action not in ('list','export'): raise Exception('Неизвестная операция.')",
-                " subprocess.run(['systemctl','daemon-reload'],stdout=subprocess.DEVNULL)",
-                " subprocess.run(['systemctl','enable','--now','pelmeni-user-policy.service'],stdout=subprocess.DEVNULL)",
-                " subprocess.run(['systemctl','restart','pelmeni-user-policy.service'],stdout=subprocess.DEVNULL)",
+                " shell('systemctl','daemon-reload')",
+                " shell('systemctl','enable','--now','pelmeni-user-policy.service')",
+                " try: os.remove('/etc/pelmeni-vpn/policy-status.json')",
+                " except FileNotFoundError: pass",
+                " started=int(time.time()); shell('systemctl','restart','pelmeni-user-policy.service')",
+                " control={}",
+                " for _ in range(10):",
+                "  time.sleep(.5)",
+                "  try: control=json.load(open('/etc/pelmeni-vpn/policy-status.json',encoding='utf-8'))",
+                "  except Exception: control={}",
+                "  if control.get('updated_at',0)>=started: break",
+                " try: usage=json.load(open('/etc/pelmeni-vpn/usage.json',encoding='utf-8'))",
+                " except Exception: usage={}",
+                " healthy=bool(control.get('healthy',False))",
+                " if action=='create' and any(int(req.get(k,0))>0 for k in ('daily_mb','monthly_mb','speed_mbps')) and not healthy:",
+                "  subprocess.run(['userdel','-r',login],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)",
+                "  users[:]=[x for x in users if x.get('login')!=login]; save()",
+                "  raise Exception('Контроллер лимитов не запустился: '+control.get('error','нет диагностики'))",
+                " for x in users:",
+                "  stats=usage.get(x['login'],{})",
+                "  x['day_bytes']=int(stats.get('day_bytes',0)); x['month_bytes']=int(stats.get('month_bytes',0)); x['blocked']=bool(stats.get('blocked',False))",
+                "  x['expired']=bool(x.get('expires') and x['expires']<str(datetime.date.today()))",
+                "  x['policy_healthy']=healthy; x['policy_error']=control.get('error',''); x['status_updated_at']=int(control.get('updated_at',0))",
                 " data=json.dumps(users,ensure_ascii=False).encode()",
                 " print('PELMENI_USERS='+base64.b64encode(data).decode())",
                 "except Exception as e:",
@@ -327,25 +371,38 @@ final class ServerAccessManager {
         return String.join("\n",
                 "#!/usr/bin/python3",
                 "import datetime,json,os,pwd,subprocess,time",
-                "users_path='/etc/pelmeni-vpn/users.json'; state_path='/etc/pelmeni-vpn/usage.json'",
+                "users_path='/etc/pelmeni-vpn/users.json'; state_path='/etc/pelmeni-vpn/usage.json'; status_path='/etc/pelmeni-vpn/policy-status.json'",
                 "def load(path,default):",
                 " try: return json.load(open(path,encoding='utf-8'))",
                 " except Exception: return default",
-                "def nft(*args): return subprocess.run(['nft',*args],capture_output=True,text=True)",
-                "def rebuild(users,state):",
-                " nft('delete','table','inet','pelmeni_users')",
-                " nft('add','table','inet','pelmeni_users')",
-                " nft('add','chain','inet','pelmeni_users','output','{ type filter hook output priority 10; policy accept; }')",
+                "def save_json(path,value):",
+                " tmp=path+'.tmp'; open(tmp,'w',encoding='utf-8').write(json.dumps(value,ensure_ascii=False)); os.chmod(tmp,0o600); os.replace(tmp,path)",
+                "def write_status(healthy,error=''): save_json(status_path,{'healthy':healthy,'error':error,'updated_at':int(time.time())})",
+                "def ruleset(table,users,state):",
+                " lines=['table inet '+table+' {',' chain output {','  type filter hook output priority 10; policy accept;']",
                 " for u in users:",
                 "  try: uid=str(pwd.getpwnam(u['login']).pw_uid)",
                 "  except KeyError: continue",
-                "  nft('add','rule','inet','pelmeni_users','output','meta','skuid',uid,'counter','comment','pelmeni:'+u['login'])",
                 "  s=state.get(u['login'],{})",
                 "  blocked=(u.get('daily_mb',0)>0 and s.get('day_bytes',0)>=u['daily_mb']*1048576) or (u.get('monthly_mb',0)>0 and s.get('month_bytes',0)>=u['monthly_mb']*1048576)",
-                "  if blocked: nft('add','rule','inet','pelmeni_users','output','meta','skuid',uid,'drop')",
-                "  elif u.get('speed_mbps',0)>0: nft('add','rule','inet','pelmeni_users','output','meta','skuid',uid,'limit','rate','over',str(u['speed_mbps']*125),'kbytes/second','burst','256','kbytes','drop')",
+                "  if blocked: lines.append('  meta skuid '+uid+' drop comment \"pelmeni-block:'+u['login']+'\"')",
+                "  else:",
+                "   rate=int(u.get('speed_mbps',0))*125",
+                "   if rate>0: lines.append('  meta skuid '+uid+' limit rate over '+str(rate)+' kbytes/second burst '+str(max(16,min(256,rate//4)))+' kbytes drop comment \"pelmeni-speed:'+u['login']+'\"')",
+                "   lines.append('  meta skuid '+uid+' counter comment \"pelmeni:'+u['login']+'\"')",
+                " lines.extend([' }','}']); return '\\n'.join(lines)+'\\n'",
+                "def run_nft(args,stdin=None): return subprocess.run(['nft',*args],input=stdin,capture_output=True,text=True)",
+                "def rebuild(users,state):",
+                " check=run_nft(['-c','-f','-'],ruleset('pelmeni_users_check',users,state))",
+                " if check.returncode: raise RuntimeError('Проверка nftables: '+(check.stderr.strip() or check.stdout.strip()))",
+                " run_nft(['delete','table','inet','pelmeni_users'])",
+                " apply=run_nft(['-f','-'],ruleset('pelmeni_users',users,state))",
+                " if apply.returncode: raise RuntimeError('Применение nftables: '+(apply.stderr.strip() or apply.stdout.strip()))",
+                " verify=run_nft(['list','chain','inet','pelmeni_users','output'])",
+                " if verify.returncode: raise RuntimeError('Правила nftables не появились: '+verify.stderr.strip())",
+                " write_status(True,'')",
                 "def counters():",
-                " out={}; data=nft('-j','list','chain','inet','pelmeni_users','output')",
+                " out={}; data=run_nft(['-j','list','chain','inet','pelmeni_users','output'])",
                 " if data.returncode: return out",
                 " try: rows=json.loads(data.stdout).get('nftables',[])",
                 " except Exception: return out",
@@ -355,27 +412,34 @@ final class ServerAccessManager {
                 "  for expr in rule.get('expr',[]):",
                 "   if 'counter' in expr: out[comment[8:]]=expr['counter'].get('bytes',0)",
                 " return out",
-                "users=load(users_path,[]); state=load(state_path,{})",
-                "today=str(datetime.date.today()); month=today[:7]",
-                "for u in users:",
-                " s=state.setdefault(u['login'],{'day':today,'month':month,'day_bytes':0,'month_bytes':0,'last':0})",
-                " if s.get('day')!=today: s.update(day=today,day_bytes=0)",
-                " if s.get('month')!=month: s.update(month=month,month_bytes=0)",
-                "rebuild(users,state)",
-                "while True:",
-                " time.sleep(10); users=load(users_path,[]); now=counters(); changed=False",
+                "def main():",
+                " users=load(users_path,[]); state=load(state_path,{})",
                 " today=str(datetime.date.today()); month=today[:7]",
                 " for u in users:",
-                "  name=u['login']; s=state.setdefault(name,{'day':today,'month':month,'day_bytes':0,'month_bytes':0,'last':0})",
-                "  if s.get('day')!=today: s.update(day=today,day_bytes=0); changed=True",
-                "  if s.get('month')!=month: s.update(month=month,month_bytes=0); changed=True",
-                "  raw=now.get(name,0); delta=max(0,raw-s.get('last',0)); s['last']=raw; s['day_bytes']=s.get('day_bytes',0)+delta; s['month_bytes']=s.get('month_bytes',0)+delta",
-                "  was=s.get('blocked',False); block=(u.get('daily_mb',0)>0 and s['day_bytes']>=u['daily_mb']*1048576) or (u.get('monthly_mb',0)>0 and s['month_bytes']>=u['monthly_mb']*1048576)",
-                "  s['blocked']=block; changed=changed or was!=block",
-                " tmp=state_path+'.tmp'; open(tmp,'w').write(json.dumps(state)); os.replace(tmp,state_path)",
-                " if changed:",
-                "  rebuild(users,state)",
-                "  for s in state.values(): s['last']=0",
+                "  s=state.setdefault(u['login'],{'day':today,'month':month,'day_bytes':0,'month_bytes':0,'last':0,'blocked':False})",
+                "  if s.get('day')!=today: s.update(day=today,day_bytes=0)",
+                "  if s.get('month')!=month: s.update(month=month,month_bytes=0)",
+                " rebuild(users,state)",
+                " for s in state.values(): s['last']=0",
+                " save_json(state_path,state)",
+                " while True:",
+                "  time.sleep(2); users=load(users_path,[]); now=counters(); changed=False",
+                "  today=str(datetime.date.today()); month=today[:7]",
+                "  for u in users:",
+                "   name=u['login']; s=state.setdefault(name,{'day':today,'month':month,'day_bytes':0,'month_bytes':0,'last':0,'blocked':False})",
+                "   if s.get('day')!=today: s.update(day=today,day_bytes=0); changed=True",
+                "   if s.get('month')!=month: s.update(month=month,month_bytes=0); changed=True",
+                "   raw=now.get(name,0); delta=max(0,raw-s.get('last',0)); s['last']=raw; s['day_bytes']=s.get('day_bytes',0)+delta; s['month_bytes']=s.get('month_bytes',0)+delta",
+                "   was=bool(s.get('blocked',False)); block=(u.get('daily_mb',0)>0 and s['day_bytes']>=u['daily_mb']*1048576) or (u.get('monthly_mb',0)>0 and s['month_bytes']>=u['monthly_mb']*1048576)",
+                "   s['blocked']=block; changed=changed or was!=block",
+                "  save_json(state_path,state)",
+                "  if changed:",
+                "   rebuild(users,state)",
+                "   for s in state.values(): s['last']=0",
+                "   save_json(state_path,state)",
+                "try: main()",
+                "except Exception as error:",
+                " write_status(False,str(error)); raise",
                 "");
     }
 

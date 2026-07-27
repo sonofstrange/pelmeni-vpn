@@ -18,6 +18,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.net.VpnService;
+import android.graphics.Bitmap;
 import android.graphics.drawable.Icon;
 import android.text.InputType;
 import android.view.View;
@@ -25,6 +26,7 @@ import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.RadioButton;
 import android.widget.RadioGroup;
@@ -34,14 +36,24 @@ import android.widget.Toast;
 
 import org.json.JSONObject;
 
+import com.google.zxing.BarcodeFormat;
+import com.google.zxing.EncodeHintType;
+import com.google.zxing.common.BitMatrix;
+import com.google.zxing.integration.android.IntentIntegrator;
+import com.google.zxing.integration.android.IntentResult;
+import com.google.zxing.qrcode.QRCodeWriter;
+import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel;
+
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -309,9 +321,22 @@ public class MainActivity extends Activity {
                 "Ввести IP, SSH-пользователя, пароль и параметры сервера",
                 () -> showServerEditor(null));
         addPageAction(page, "Добавить по коду",
-                "Вставить код, который создал владелец VPN-сервера",
+                "Вставить текстовый код, который создал владелец VPN-сервера",
                 this::showImportAccessCode);
+        addPageAction(page, "Сканировать QR-код",
+                "Навести камеру на QR владельца VPN-сервера",
+                this::scanAccessQr);
         showScrollablePage(page, navAdd);
+    }
+
+    private void scanAccessQr() {
+        IntentIntegrator scanner = new IntentIntegrator(this);
+        scanner.setDesiredBarcodeFormats(IntentIntegrator.QR_CODE);
+        scanner.setPrompt("Наведи камеру на QR-код Пельмени VPN");
+        scanner.setBeepEnabled(false);
+        scanner.setBarcodeImageEnabled(false);
+        scanner.setOrientationLocked(false);
+        scanner.initiateScan();
     }
 
     private void showImportAccessCode() {
@@ -326,20 +351,23 @@ public class MainActivity extends Activity {
                 .setTitle("Код доступа")
                 .setMessage("Вставь код от владельца сервера. Он добавится как отдельный профиль.")
                 .setView(wrapper)
-                .setPositiveButton("Добавить", (dialog, which) -> {
-                    try {
-                        ServerProfiles.Profile profile = ServerAccessCode.importCode(
-                                new SecureStore(this), input.getText().toString());
-                        loadSettings();
-                        Toast.makeText(this, "Добавлен сервер «" + profile.name + "»",
-                                Toast.LENGTH_LONG).show();
-                        showHomePage();
-                    } catch (Exception error) {
-                        Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show();
-                    }
-                })
+                .setPositiveButton("Добавить", (dialog, which) ->
+                        importAccessCode(input.getText().toString()))
                 .setNegativeButton("Отмена", null)
                 .show();
+    }
+
+    private void importAccessCode(String code) {
+        try {
+            ServerProfiles.Profile profile = ServerAccessCode.importCode(
+                    new SecureStore(this), code);
+            loadSettings();
+            Toast.makeText(this, "Добавлен сервер «" + profile.name + "»",
+                    Toast.LENGTH_LONG).show();
+            showHomePage();
+        } catch (Exception error) {
+            Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show();
+        }
     }
 
     private void showCreateManagedUser() {
@@ -424,9 +452,24 @@ public class MainActivity extends Activity {
             if (code == null || code.isEmpty()) {
                 throw new Exception("Сервер не вернул код доступа.");
             }
+            LinearLayout content = new LinearLayout(this);
+            content.setOrientation(LinearLayout.VERTICAL);
+            content.setPadding(dp(20), dp(8), dp(20), 0);
+            ImageView qr = new ImageView(this);
+            qr.setImageBitmap(createQrBitmap(code, 900));
+            qr.setContentDescription("QR-код доступа для " + managed.label);
+            qr.setAdjustViewBounds(true);
+            content.addView(qr, new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, dp(320)));
+            TextView warning = new TextView(this);
+            warning.setText("Отсканируй QR через «Добавить сервер». QR содержит пароль пользователя — показывай его только тому, кому доверяешь.");
+            warning.setTextColor(0xFF9297A2);
+            warning.setTextSize(13);
+            warning.setPadding(0, dp(10), 0, 0);
+            content.addView(warning);
             new AlertDialog.Builder(this)
                     .setTitle("Код для " + managed.label)
-                    .setMessage(code + "\n\nКод содержит пароль пользователя. Отправляй его только тому, кому доверяешь.")
+                    .setView(content)
                     .setPositiveButton("Копировать", (dialog, which) -> {
                         ClipboardManager clipboard =
                                 (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
@@ -445,6 +488,25 @@ public class MainActivity extends Activity {
         } catch (Exception error) {
             Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show();
         }
+    }
+
+    private Bitmap createQrBitmap(String value, int size) throws Exception {
+        Map<EncodeHintType, Object> hints = new EnumMap<>(EncodeHintType.class);
+        hints.put(EncodeHintType.CHARACTER_SET, "UTF-8");
+        hints.put(EncodeHintType.ERROR_CORRECTION, ErrorCorrectionLevel.M);
+        hints.put(EncodeHintType.MARGIN, 2);
+        BitMatrix matrix = new QRCodeWriter().encode(
+                value, BarcodeFormat.QR_CODE, size, size, hints);
+        int[] pixels = new int[size * size];
+        for (int y = 0; y < size; y++) {
+            int offset = y * size;
+            for (int x = 0; x < size; x++) {
+                pixels[offset + x] = matrix.get(x, y) ? 0xFF000000 : 0xFFFFFFFF;
+            }
+        }
+        Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        bitmap.setPixels(pixels, 0, size, 0, 0, size, size);
+        return bitmap;
     }
 
     private void showExtendManagedUser(ServerAccessManager.ManagedUser managed) {
@@ -2465,6 +2527,14 @@ public class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        IntentResult qrResult =
+                IntentIntegrator.parseActivityResult(requestCode, resultCode, data);
+        if (qrResult != null) {
+            if (qrResult.getContents() != null) {
+                importAccessCode(qrResult.getContents());
+            }
+            return;
+        }
         if (requestCode == REQUEST_VPN && resultCode == RESULT_OK) {
             if (pendingLiveVpnPermission && running) {
                 pendingLiveVpnPermission = false;

@@ -457,7 +457,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="WIP"
+                android:text="BETA"
                 android:textColor="#B8BBC3"
                 android:textSize="21sp"
                 android:textStyle="bold" />

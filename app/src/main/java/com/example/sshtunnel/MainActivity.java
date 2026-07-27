@@ -65,6 +65,8 @@ public class MainActivity extends Activity {
     private View activePage;
     private boolean running;
     private boolean receiverRegistered;
+    private boolean suppressModeChanges;
+    private boolean pendingLiveVpnPermission;
     private volatile boolean speedTestRunning;
     private volatile boolean serverSetupRunning;
     private volatile boolean updateCheckRunning;
@@ -143,10 +145,16 @@ public class MainActivity extends Activity {
                 new SecureStore(this).putBoolean("auto_reconnect", checked));
         startOnBoot.setOnCheckedChangeListener((button, checked) ->
                 new SecureStore(this).putBoolean("start_on_boot", checked));
-        enableVpn.setOnCheckedChangeListener((button, checked) ->
-                new SecureStore(this).putBoolean("vpn_mode", checked));
-        enableTelegram.setOnCheckedChangeListener((button, checked) ->
-                new SecureStore(this).putBoolean("telegram_proxy", checked));
+        enableVpn.setOnCheckedChangeListener((button, checked) -> {
+            if (suppressModeChanges) return;
+            new SecureStore(this).putBoolean("vpn_mode", checked);
+            applyLiveModeChange(true, checked);
+        });
+        enableTelegram.setOnCheckedChangeListener((button, checked) -> {
+            if (suppressModeChanges) return;
+            new SecureStore(this).putBoolean("telegram_proxy", checked);
+            applyLiveModeChange(false, checked);
+        });
 
         save.setOnClickListener(v -> {
             if (saveSettings()) {
@@ -432,10 +440,12 @@ public class MainActivity extends Activity {
     private void showSplitTunnelPage() {
         SecureStore store = new SecureStore(this);
         SplitTunnel.ensureDefaults(store);
-        SplitTunnel.Profile active = SplitTunnel.active(store);
+        List<SplitTunnel.Profile> selectedProfiles = SplitTunnel.selected(store);
+        SplitTunnel.Profile active = SplitTunnel.combined(store);
         LinearLayout page = createPageContent("Раздельное туннелирование",
-                "1. Включи функцию. 2. Выбери набор. 3. Через шестерёнку укажи, куда "
-                        + "направлять адреса. Работающий VPN переподключится автоматически.");
+                "Можно выбрать несколько наборов одного типа. Их адреса объединятся. "
+                        + "Набор другого типа начинает новую комбинацию, потому что режимы "
+                        + "«только через VPN» и «кроме VPN» нельзя смешивать.");
 
         addToggleCard(page, "Использовать раздельные маршруты",
                 "Если выключено, весь трафик работает как раньше и идёт через VPN.",
@@ -456,8 +466,13 @@ public class MainActivity extends Activity {
                     (SplitTunnel.MODE_ONLY.equals(active.mode)
                             ? "Через VPN только адреса из списка"
                             : "Через VPN всё, кроме адресов из списка")
+                            + " · наборов: " + selectedProfiles.size()
                             + " · " + active.entries.size() + " записей");
-            if (SplitTunnel.isBrawlTest(active)) {
+            boolean brawlSelected = false;
+            for (SplitTunnel.Profile profile : selectedProfiles) {
+                if (SplitTunnel.isBrawlTest(profile)) brawlSelected = true;
+            }
+            if (brawlSelected) {
                 addCardSubtitle(current,
                         "Проверка: остальные сайты должны видеть VPN, а Brawl Stars — "
                                 + "подключаться напрямую и не запускаться без VPN.");
@@ -467,20 +482,37 @@ public class MainActivity extends Activity {
 
         addSectionTitle(page, "Наборы адресов");
         for (SplitTunnel.Profile profile : SplitTunnel.list(store)) {
-            boolean selected = active != null && active.id.equals(profile.id);
+            boolean selected = false;
+            for (SplitTunnel.Profile selectedProfile : selectedProfiles) {
+                if (selectedProfile.id.equals(profile.id)) selected = true;
+            }
             LinearLayout row = new LinearLayout(this);
             row.setGravity(android.view.Gravity.CENTER_VERTICAL);
             row.setPadding(dp(4), dp(10), 0, dp(10));
             row.setClickable(true);
             row.setFocusable(true);
             row.setOnClickListener(v -> {
-                SplitTunnel.activate(store, profile.id);
+                boolean replacingMode = false;
+                List<SplitTunnel.Profile> before = SplitTunnel.selected(store);
+                if (!before.isEmpty() && !before.get(0).mode.equals(profile.mode)) {
+                    replacingMode = true;
+                }
+                if (!SplitTunnel.toggleSelected(store, profile.id)) {
+                    Toast.makeText(this, "Должен остаться хотя бы один набор",
+                            Toast.LENGTH_SHORT).show();
+                    return;
+                }
                 applySplitTunnelChanges();
                 showSplitTunnelPage();
+                if (replacingMode) {
+                    Toast.makeText(this,
+                            "Выбран другой тип — предыдущая комбинация заменена",
+                            Toast.LENGTH_LONG).show();
+                }
             });
 
             TextView marker = new TextView(this);
-            marker.setText(selected ? "●" : "○");
+            marker.setText(selected ? "☑" : "☐");
             marker.setTextColor(selected ? 0xFFFFAA5B : 0xFF7D828D);
             marker.setTextSize(27);
             marker.setGravity(android.view.Gravity.CENTER);
@@ -642,7 +674,7 @@ public class MainActivity extends Activity {
 
     private void updateSplitSummary() {
         SecureStore store = new SecureStore(this);
-        SplitTunnel.Profile active = SplitTunnel.active(store);
+        SplitTunnel.Profile active = SplitTunnel.combined(store);
         if (!SplitTunnel.enabled(store)) {
             splitTunnelSummary.setText("Выключено · весь трафик через VPN");
             return;
@@ -654,7 +686,9 @@ public class MainActivity extends Activity {
         splitTunnelSummary.setText(
                 (SplitTunnel.MODE_ONLY.equals(active.mode)
                         ? "Только через VPN: " : "Не через VPN: ")
-                        + active.name + " · " + active.entries.size());
+                        + active.name + " · наборов: "
+                        + SplitTunnel.selected(store).size()
+                        + " · " + active.entries.size());
     }
 
     private void applySplitTunnelChanges() {
@@ -675,7 +709,7 @@ public class MainActivity extends Activity {
     }
 
     private void beginSplitExport() {
-        SplitTunnel.Profile profile = SplitTunnel.active(new SecureStore(this));
+        SplitTunnel.Profile profile = SplitTunnel.combined(new SecureStore(this));
         if (profile == null) {
             Toast.makeText(this, "Сначала создай набор", Toast.LENGTH_SHORT).show();
             return;
@@ -697,7 +731,7 @@ public class MainActivity extends Activity {
     private void writeSplitConfig(Uri uri) {
         if (uri == null) return;
         try (OutputStream output = getContentResolver().openOutputStream(uri, "wt")) {
-            SplitTunnel.Profile profile = SplitTunnel.active(new SecureStore(this));
+            SplitTunnel.Profile profile = SplitTunnel.combined(new SecureStore(this));
             if (output == null || profile == null) throw new Exception("No active profile");
             output.write(SplitTunnel.exportJson(profile).getBytes(StandardCharsets.UTF_8));
             Toast.makeText(this, "Набор экспортирован", Toast.LENGTH_SHORT).show();
@@ -1218,8 +1252,13 @@ public class MainActivity extends Activity {
         autoReconnect.setChecked(store.getBoolean("auto_reconnect", true));
         startOnBoot.setChecked(store.getBoolean("start_on_boot", false));
         boolean vpnEnabled = store.getBoolean("vpn_mode", false);
-        enableVpn.setChecked(vpnEnabled);
-        enableTelegram.setChecked(store.getBoolean("telegram_proxy", !vpnEnabled));
+        suppressModeChanges = true;
+        try {
+            enableVpn.setChecked(vpnEnabled);
+            enableTelegram.setChecked(store.getBoolean("telegram_proxy", !vpnEnabled));
+        } finally {
+            suppressModeChanges = false;
+        }
         updateSplitSummary();
         updateServerCard();
     }
@@ -2038,7 +2077,19 @@ public class MainActivity extends Activity {
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == REQUEST_VPN && resultCode == RESULT_OK) {
-            startVpnTunnel();
+            if (pendingLiveVpnPermission && running) {
+                pendingLiveVpnPermission = false;
+                reconfigureRunningModes();
+            } else {
+                pendingLiveVpnPermission = false;
+                startVpnTunnel();
+            }
+        } else if (requestCode == REQUEST_VPN) {
+            pendingLiveVpnPermission = false;
+            suppressModeChanges = true;
+            enableVpn.setChecked(false);
+            suppressModeChanges = false;
+            new SecureStore(this).putBoolean("vpn_mode", false);
         } else if (requestCode == REQUEST_EXPORT && resultCode == RESULT_OK && data != null) {
             writeConfig(data.getData());
         } else if (requestCode == REQUEST_IMPORT && resultCode == RESULT_OK && data != null) {
@@ -2062,6 +2113,48 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(vpnIntent);
         else startService(vpnIntent);
         update("Starting VPN...");
+    }
+
+    private void applyLiveModeChange(boolean vpnChanged, boolean checked) {
+        if (!enableVpn.isChecked() && !enableTelegram.isChecked()) {
+            if (running) stopTunnel();
+            else update("Отключено");
+            return;
+        }
+        if (!running) {
+            if (checked) startTunnel();
+            return;
+        }
+        if (vpnChanged && checked) {
+            Intent permission = VpnService.prepare(this);
+            if (permission != null) {
+                pendingLiveVpnPermission = true;
+                startActivityForResult(permission, REQUEST_VPN);
+                return;
+            }
+        }
+        reconfigureRunningModes();
+    }
+
+    private void reconfigureRunningModes() {
+        SecureStore store = new SecureStore(this);
+        if (!store.getBoolean("vpn_mode", false)) {
+            startService(new Intent(this, VpnTunnelService.class)
+                    .setAction(VpnTunnelService.STOP)
+                    .putExtra(VpnTunnelService.EXTRA_STOP_SSH, false));
+        }
+        Intent ssh = new Intent(this, TunnelService.class)
+                .setAction(TunnelService.RECONFIGURE);
+        if (Build.VERSION.SDK_INT >= 26) startForegroundService(ssh);
+        else startService(ssh);
+        if (store.getBoolean("vpn_mode", false)) {
+            Intent vpn = VpnTunnelService.includeRoutingSnapshot(
+                    new Intent(this, VpnTunnelService.class)
+                            .setAction(VpnTunnelService.START), store);
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(vpn);
+            else startService(vpn);
+        }
+        update("Применяем выбранные режимы…");
     }
 
     private void stopTunnel() {
@@ -2089,8 +2182,8 @@ public class MainActivity extends Activity {
         showPassword.setEnabled(enabled);
         autoReconnect.setEnabled(enabled);
         startOnBoot.setEnabled(enabled);
-        enableVpn.setEnabled(enabled);
-        enableTelegram.setEnabled(enabled);
+        enableVpn.setEnabled(true);
+        enableTelegram.setEnabled(true);
         serverSelect.setEnabled(true);
         serverEdit.setEnabled(enabled);
     }

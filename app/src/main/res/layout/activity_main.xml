@@ -108,7 +108,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:paddingStart="34dp"
-                    android:text="Браузер и остальные приложения пойдут через выбранный сервер."
+                    android:text="Можно включать и выключать отдельно, не останавливая прокси Telegram."
                     android:textColor="#8F949F"
                     android:textSize="13sp" />
 
@@ -126,7 +126,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:paddingStart="34dp"
-                    android:text="Можно включить вместе с VPN или использовать отдельно."
+                    android:text="Оставь включённым постоянно, а VPN добавляй только когда он нужен."
                     android:textColor="#8F949F"
                     android:textSize="13sp" />
 

@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class TunnelService extends Service {
     public static final String START = "start";
     public static final String STOP = "stop";
+    public static final String RECONFIGURE = "reconfigure";
     public static final String ACTION_STATUS = "com.example.sshtunnel.STATUS";
 
     private static final String CHANNEL = "tunnel";
@@ -24,6 +25,7 @@ public class TunnelService extends Service {
     private final AtomicBoolean loopRunning = new AtomicBoolean(false);
     private volatile boolean wanted = false;
     private volatile boolean forceReconnect = false;
+    private volatile boolean modesChanged = false;
     private volatile Session session;
     private volatile Session vpnSession;
     private volatile SocksProxy telegramSocksProxy;
@@ -81,6 +83,10 @@ public class TunnelService extends Service {
             getSystemService(NotificationManager.class).cancel(ID);
             stopSelf();
             return START_NOT_STICKY;
+        }
+        if (intent != null && RECONFIGURE.equals(intent.getAction()) && wanted) {
+            reconfigureModes();
+            return START_STICKY;
         }
 
         SecureStore store = new SecureStore(this);
@@ -171,6 +177,12 @@ public class TunnelService extends Service {
         startConnectionLoop();
     }
 
+    private synchronized void reconfigureModes() {
+        if (!wanted) return;
+        modesChanged = true;
+        send("Применяем режимы VPN и Telegram…");
+    }
+
     private void startConnectionLoop() {
         if (!loopRunning.compareAndSet(false, true)) return;
         worker.submit(() -> {
@@ -197,6 +209,10 @@ public class TunnelService extends Service {
                     }
 
                     if (!wanted) break;
+                    if (forceReconnect) {
+                        delaySeconds = 2;
+                        continue;
+                    }
                     sleepInterruptibly(delaySeconds * 1000L);
                     delaySeconds = Math.min(delaySeconds * 2, 30);
                 }
@@ -291,6 +307,7 @@ public class TunnelService extends Service {
 
     private void monitorConnection() throws Exception {
         while (wanted && !forceReconnect) {
+            if (modesChanged) applyModeChanges();
             Session current = session;
             Session currentVpn = vpnSession;
             if (current == null || !current.isConnected()) {
@@ -308,6 +325,88 @@ public class TunnelService extends Service {
             }
             sleepInterruptibly(2_000L);
         }
+    }
+
+    private void applyModeChanges() throws Exception {
+        modesChanged = false;
+        SecureStore store = new SecureStore(this);
+        boolean telegramEnabled = store.getBoolean("telegram_proxy", true);
+        boolean vpnEnabled = store.getBoolean("vpn_mode", false);
+        int windowSize = NetworkTuning.windowKiB(store) * 1024;
+        int packetSize = NetworkTuning.packetKiB(store) * 1024;
+        String host = store.getPlain("host", "").trim();
+        String user = store.getPlain("user", "root").trim();
+        String password = store.getSecret();
+        int sshPort = parsePort(store.getPlain("port", "22"), 22);
+        boolean tlsProtected = TlsTransport.isEnabledFor(store, host);
+
+        if (telegramEnabled && telegramSocksProxy == null) {
+            Session newTelegramSession = connectSession(
+                    store, host, user, password, sshPort, tlsProtected, windowSize);
+            SocksProxy newTelegramProxy = new SocksProxy(
+                    newTelegramSession, TunnelMode.telegramSocksPort(store),
+                    windowSize, packetSize);
+            try {
+                newTelegramProxy.start();
+            } catch (Exception error) {
+                newTelegramSession.disconnect();
+                throw error;
+            }
+            if (vpnSocksProxy != null && vpnSession == null) {
+                vpnSession = session;
+            }
+            session = newTelegramSession;
+            telegramSocksProxy = newTelegramProxy;
+        }
+
+        if (vpnEnabled && vpnSocksProxy == null) {
+            Session newVpnSession = connectSession(
+                    store, host, user, password, sshPort, tlsProtected, windowSize);
+            SocksProxy newVpnProxy = new SocksProxy(
+                    newVpnSession, TunnelMode.vpnSocksPort(store),
+                    windowSize, packetSize);
+            try {
+                newVpnProxy.start();
+            } catch (Exception error) {
+                newVpnSession.disconnect();
+                throw error;
+            }
+            if (telegramSocksProxy == null) {
+                session = newVpnSession;
+                vpnSession = null;
+            } else {
+                vpnSession = newVpnSession;
+            }
+            vpnSocksProxy = newVpnProxy;
+        }
+
+        if (!vpnEnabled && vpnSocksProxy != null) {
+            collectAndClose(vpnSocksProxy);
+            vpnSocksProxy = null;
+            Session oldVpn = vpnSession;
+            vpnSession = null;
+            if (oldVpn == null && telegramSocksProxy == null) {
+                oldVpn = session;
+                session = null;
+            }
+            if (oldVpn != null) oldVpn.disconnect();
+        }
+
+        if (!telegramEnabled && telegramSocksProxy != null) {
+            collectAndClose(telegramSocksProxy);
+            telegramSocksProxy = null;
+            Session oldTelegram = session;
+            if (vpnSession != null) {
+                session = vpnSession;
+                vpnSession = null;
+            } else {
+                session = null;
+            }
+            if (oldTelegram != null) oldTelegram.disconnect();
+        }
+
+        connected = session != null && session.isConnected();
+        send("Подключено · " + TunnelMode.portsLabel(store));
     }
 
     private synchronized void startStats() {

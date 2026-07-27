@@ -55,7 +55,7 @@ public class VpnTunnelService extends VpnService {
 
     public static Intent includeRoutingSnapshot(Intent intent, SecureStore store) {
         boolean enabled = SplitTunnel.enabled(store);
-        SplitTunnel.Profile profile = SplitTunnel.active(store);
+        SplitTunnel.Profile profile = SplitTunnel.combined(store);
         intent.putExtra(EXTRA_SPLIT_SNAPSHOT, true)
                 .putExtra(EXTRA_SPLIT_ENABLED, enabled);
         if (profile != null) {

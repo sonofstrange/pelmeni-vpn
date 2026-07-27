@@ -7,10 +7,10 @@ import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
-import java.time.LocalDate;
-import java.time.YearMonth;
-
 final class UserAccessPolicy {
+    static final long DAY_SECONDS = 24 * 60 * 60;
+    static final long MONTH_SECONDS = 30 * DAY_SECONDS;
+
     static final class Policy {
         final boolean configured;
         final String expires;
@@ -18,16 +18,18 @@ final class UserAccessPolicy {
         final long monthlyMb;
         final long speedMbps;
         final long serverOffsetMinutes;
+        final long issuedAt;
 
         Policy(boolean configured, String expires,
                long dailyMb, long monthlyMb, long speedMbps,
-               long serverOffsetMinutes) {
+               long serverOffsetMinutes, long issuedAt) {
             this.configured = configured;
             this.expires = expires;
             this.dailyMb = dailyMb;
             this.monthlyMb = monthlyMb;
             this.speedMbps = speedMbps;
             this.serverOffsetMinutes = serverOffsetMinutes;
+            this.issuedAt = issuedAt;
         }
 
         boolean hasLimits() {
@@ -38,10 +40,17 @@ final class UserAccessPolicy {
     static final class Usage {
         final long dayBytes;
         final long monthBytes;
+        final long dayPeriod;
+        final long monthPeriod;
+        final long resetAt;
 
-        Usage(long dayBytes, long monthBytes) {
+        Usage(long dayBytes, long monthBytes,
+              long dayPeriod, long monthPeriod, long resetAt) {
             this.dayBytes = dayBytes;
             this.monthBytes = monthBytes;
+            this.dayPeriod = dayPeriod;
+            this.monthPeriod = monthPeriod;
+            this.resetAt = resetAt;
         }
     }
 
@@ -74,6 +83,10 @@ final class UserAccessPolicy {
         store.putLong(prefix + "server_offset_minutes",
                 code.optLong("server_offset_minutes",
                         store.getLong(prefix + "server_offset_minutes", localOffset)));
+        long nowSeconds = System.currentTimeMillis() / 1000L;
+        long issuedAt = Math.max(1, code.optLong("issued_at",
+                store.getLong(prefix + "issued_at", nowSeconds)));
+        store.putLong(prefix + "issued_at", issuedAt);
         long usageResetAt = Math.max(0, code.optLong("usage_reset_at", 0));
         if (usageResetAt > store.getLong(prefix + "usage_reset_at", 0)) {
             store.putLong(prefix + "usage_reset_at", usageResetAt);
@@ -95,7 +108,9 @@ final class UserAccessPolicy {
                 store.getLong(prefix + "daily_mb", 0),
                 store.getLong(prefix + "monthly_mb", 0),
                 store.getLong(prefix + "speed_mbps", 0),
-                store.getLong(prefix + "server_offset_minutes", 0));
+                store.getLong(prefix + "server_offset_minutes", 0),
+                store.getLong(prefix + "issued_at",
+                        System.currentTimeMillis() / 1000L));
     }
 
     static void syncFromServer(
@@ -120,7 +135,10 @@ final class UserAccessPolicy {
         String prefix = prefix(profileId);
         return new Usage(
                 store.getLong(prefix + "day_bytes", 0),
-                store.getLong(prefix + "month_bytes", 0));
+                store.getLong(prefix + "month_bytes", 0),
+                store.getLong(prefix + "day_period", 0),
+                store.getLong(prefix + "month_period", 0),
+                store.getLong(prefix + "usage_reset_at", 0));
     }
 
     static Alert record(
@@ -183,22 +201,33 @@ final class UserAccessPolicy {
                 + "% " + period + " лимита";
     }
 
+    static long nextResetAt(long issuedAt, boolean monthly) {
+        long now = System.currentTimeMillis() / 1000L;
+        long origin = issuedAt > 0 ? issuedAt : now;
+        long interval = monthly ? MONTH_SECONDS : DAY_SECONDS;
+        long elapsed = Math.max(0, now - origin);
+        return origin + (elapsed / interval + 1) * interval;
+    }
+
     private static void normalizeUsage(SecureStore store, String profileId) {
         String prefix = prefix(profileId);
-        if (store.getLong(prefix + "notice_version", 0) != 2) {
-            store.putLong(prefix + "notice_version", 2);
+        if (store.getLong(prefix + "notice_version", 0) != 3) {
+            store.putLong(prefix + "notice_version", 3);
             store.putLong(prefix + "day_notice", 0);
             store.putLong(prefix + "month_notice", 0);
         }
-        String today = LocalDate.now().toString();
-        String month = YearMonth.now().toString();
-        if (!today.equals(store.getPlain(prefix + "day", ""))) {
-            store.putPlain(prefix + "day", today);
+        long now = System.currentTimeMillis() / 1000L;
+        long issuedAt = store.getLong(prefix + "issued_at", now);
+        long elapsed = Math.max(0, now - issuedAt);
+        long dayPeriod = elapsed / DAY_SECONDS;
+        long monthPeriod = elapsed / MONTH_SECONDS;
+        if (store.getLong(prefix + "day_period", -1) != dayPeriod) {
+            store.putLong(prefix + "day_period", dayPeriod);
             store.putLong(prefix + "day_bytes", 0);
             store.putLong(prefix + "day_notice", 0);
         }
-        if (!month.equals(store.getPlain(prefix + "month", ""))) {
-            store.putPlain(prefix + "month", month);
+        if (store.getLong(prefix + "month_period", -1) != monthPeriod) {
+            store.putLong(prefix + "month_period", monthPeriod);
             store.putLong(prefix + "month_bytes", 0);
             store.putLong(prefix + "month_notice", 0);
         }

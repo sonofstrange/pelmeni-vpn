@@ -32,6 +32,7 @@ public class TunnelService extends Service {
     private volatile Session vpnSession;
     private volatile SocksProxy telegramSocksProxy;
     private volatile SocksProxy vpnSocksProxy;
+    private volatile UserTrafficLimiter trafficLimiter;
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
     private volatile Network activeUnderlyingNetwork;
@@ -46,6 +47,7 @@ public class TunnelService extends Service {
     private long lastSampleTime;
     private int statsTicks;
     private int policySyncTicks;
+    private long lastUsageResetAt;
     private volatile String currentStatus = "Подключение…";
     private volatile long currentSpeed;
     private volatile int currentLatency = -1;
@@ -259,15 +261,18 @@ public class TunnelService extends Service {
                 newVpnSession = connectSession(
                         store, host, user, password, sshPort, tlsProtected, windowSize);
             }
+            syncUserPolicy(newSession);
+            UserTrafficLimiter newTrafficLimiter = createTrafficLimiter(store);
             if (telegramEnabled) {
                 newTelegramProxy = new SocksProxy(
-                        newSession, telegramPort, windowSize, packetSize);
+                        newSession, telegramPort, windowSize, packetSize,
+                        newTrafficLimiter);
                 newTelegramProxy.start();
             }
             if (vpnEnabled) {
                 newVpnProxy = new SocksProxy(
                         newVpnSession == null ? newSession : newVpnSession,
-                        vpnPort, windowSize, packetSize);
+                        vpnPort, windowSize, packetSize, newTrafficLimiter);
                 newVpnProxy.start();
             }
             if (!wanted || forceReconnect) throw new JSchException("reconnect requested");
@@ -276,6 +281,7 @@ public class TunnelService extends Service {
             vpnSession = newVpnSession;
             telegramSocksProxy = newTelegramProxy;
             vpnSocksProxy = newVpnProxy;
+            trafficLimiter = newTrafficLimiter;
             connected = true;
         } catch (Exception error) {
             if (newTelegramProxy != null) newTelegramProxy.close();
@@ -286,7 +292,6 @@ public class TunnelService extends Service {
         }
 
         send("Подключено · " + TunnelMode.portsLabel(store));
-        syncUserPolicy(newSession);
     }
 
     private Session connectSession(
@@ -338,15 +343,39 @@ public class TunnelService extends Service {
     }
 
     private void syncUserPolicy(Session current) {
+        SecureStore store = new SecureStore(this);
+        ServerProfiles.Profile profile = ServerProfiles.active(store);
+        long previousResetAt = profile == null ? 0
+                : UserAccessPolicy.usage(store, profile.id).resetAt;
         try {
-            SecureStore store = new SecureStore(this);
-            ServerProfiles.Profile profile = ServerProfiles.active(store);
             if (profile != null) {
                 UserAccessPolicy.syncFromServer(store, profile.id, current);
             }
         } catch (Exception ignored) {
             // Older servers do not expose the per-user policy file yet.
         }
+        UserTrafficLimiter limiter = trafficLimiter;
+        if (limiter != null && profile != null) {
+            UserAccessPolicy.Usage usage =
+                    UserAccessPolicy.usage(store, profile.id);
+            if (usage.resetAt > previousResetAt
+                    && usage.resetAt > lastUsageResetAt) {
+                long[] traffic = trafficSnapshot();
+                lastPolicyBytes = traffic[0] + traffic[1];
+                lastUsageResetAt = usage.resetAt;
+            }
+            limiter.refresh(UserAccessPolicy.load(store, profile.id), usage);
+        }
+    }
+
+    private UserTrafficLimiter createTrafficLimiter(SecureStore store) {
+        UserTrafficLimiter limiter = new UserTrafficLimiter();
+        ServerProfiles.Profile profile = ServerProfiles.active(store);
+        if (profile != null) {
+            limiter.refresh(UserAccessPolicy.load(store, profile.id),
+                    UserAccessPolicy.usage(store, profile.id));
+        }
+        return limiter;
     }
 
     private void applyModeChanges() throws Exception {
@@ -367,7 +396,7 @@ public class TunnelService extends Service {
                     store, host, user, password, sshPort, tlsProtected, windowSize);
             SocksProxy newTelegramProxy = new SocksProxy(
                     newTelegramSession, TunnelMode.telegramSocksPort(store),
-                    windowSize, packetSize);
+                    windowSize, packetSize, trafficLimiter);
             try {
                 newTelegramProxy.start();
             } catch (Exception error) {
@@ -386,7 +415,7 @@ public class TunnelService extends Service {
                     store, host, user, password, sshPort, tlsProtected, windowSize);
             SocksProxy newVpnProxy = new SocksProxy(
                     newVpnSession, TunnelMode.vpnSocksPort(store),
-                    windowSize, packetSize);
+                    windowSize, packetSize, trafficLimiter);
             try {
                 newVpnProxy.start();
             } catch (Exception error) {
@@ -554,6 +583,7 @@ public class TunnelService extends Service {
         SocksProxy vpnProxy = vpnSocksProxy;
         telegramSocksProxy = null;
         vpnSocksProxy = null;
+        trafficLimiter = null;
         collectAndClose(telegramProxy);
         collectAndClose(vpnProxy);
         Session current = session;

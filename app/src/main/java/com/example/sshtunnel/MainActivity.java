@@ -74,6 +74,9 @@ public class MainActivity extends Activity {
     private TextView userLimitSummary;
     private TextView splitTunnelSummary;
     private TextView sessionDown, sessionUp, totalDown, totalUp;
+    private View userTrafficLimitPanel, userDailyLimitGroup, userMonthlyLimitGroup;
+    private TextView userDailyLimitLabel, userMonthlyLimitLabel;
+    private ProgressBar userDailyLimitProgress, userMonthlyLimitProgress;
     private Button toggle, toggleTelegram, toggleVpn;
     private ConnectionRingView ringTelegram, ringVpn;
     private Button save, serverSelect, serverEdit, splitTunnelButton;
@@ -131,6 +134,13 @@ public class MainActivity extends Activity {
         sessionUp = findViewById(R.id.sessionUp);
         totalDown = findViewById(R.id.totalDown);
         totalUp = findViewById(R.id.totalUp);
+        userTrafficLimitPanel = findViewById(R.id.userTrafficLimitPanel);
+        userDailyLimitGroup = findViewById(R.id.userDailyLimitGroup);
+        userMonthlyLimitGroup = findViewById(R.id.userMonthlyLimitGroup);
+        userDailyLimitLabel = findViewById(R.id.userDailyLimitLabel);
+        userMonthlyLimitLabel = findViewById(R.id.userMonthlyLimitLabel);
+        userDailyLimitProgress = findViewById(R.id.userDailyLimitProgress);
+        userMonthlyLimitProgress = findViewById(R.id.userMonthlyLimitProgress);
         serverName = findViewById(R.id.serverName);
         serverAddress = findViewById(R.id.serverAddress);
         splitTunnelSummary = findViewById(R.id.splitTunnelSummary);
@@ -323,11 +333,11 @@ public class MainActivity extends Activity {
             String state = managedUserState(managed);
             String resets = (managed.dailyMb > 0
                     ? "день " + limitResetCountdown(
-                    managed.serverOffsetMinutes, false) : "")
+                    managed.issuedAt, false) : "")
                     + (managed.dailyMb > 0 && managed.monthlyMb > 0 ? " · " : "")
                     + (managed.monthlyMb > 0
                     ? "месяц " + limitResetCountdown(
-                    managed.serverOffsetMinutes, true) : "");
+                    managed.issuedAt, true) : "");
             addCardSubtitle(card, state + " · " + expiry
                     + "\nСегодня: " + formatBytes(managed.dayBytes)
                     + (managed.dailyMb > 0 ? " / " + managed.dailyMb + " МБ" : "")
@@ -434,9 +444,9 @@ public class MainActivity extends Activity {
                 + "\nВ этом месяце: " + formatBytes(managed.monthBytes)
                 + (managed.monthlyMb > 0 ? " из " + managed.monthlyMb + " МБ" : "")
                 + (managed.dailyMb > 0 ? "\nДневной сброс "
-                + limitResetCountdown(managed.serverOffsetMinutes, false) : "")
+                + limitResetCountdown(managed.issuedAt, false) : "")
                 + (managed.monthlyMb > 0 ? "\nМесячный сброс "
-                + limitResetCountdown(managed.serverOffsetMinutes, true) : "")
+                + limitResetCountdown(managed.issuedAt, true) : "")
                 + "\nОграничение скорости: "
                 + (managed.speedMbps > 0 ? managed.speedMbps + " Мбит/с" : "нет")
                 + "\n\nКонтроллер: "
@@ -2037,14 +2047,17 @@ public class MainActivity extends Activity {
         ServerProfiles.Profile profile = ServerProfiles.active(store);
         if (profile == null) {
             userLimitSummary.setVisibility(View.GONE);
+            userTrafficLimitPanel.setVisibility(View.GONE);
             return;
         }
         UserAccessPolicy.Policy policy = UserAccessPolicy.load(store, profile.id);
         if (!policy.configured) {
             userLimitSummary.setVisibility(View.GONE);
+            userTrafficLimitPanel.setVisibility(View.GONE);
             return;
         }
         UserAccessPolicy.Usage usage = UserAccessPolicy.usage(store, profile.id);
+        updateUserTrafficLimitProgress(policy, usage);
         String expiry = policy.expires.isEmpty() ? "бессрочно" : "до " + policy.expires;
         String daily = policy.dailyMb > 0
                 ? formatBytes(usage.dayBytes) + " из " + policy.dailyMb + " МБ сегодня"
@@ -2061,9 +2074,9 @@ public class MainActivity extends Activity {
         userLimitSummary.setText("Ваш доступ · " + expiry + "\n"
                 + daily + " · " + monthly + "\nСкорость: " + speed
                 + (policy.dailyMb > 0 ? "\nДневной сброс "
-                + limitResetCountdown(policy.serverOffsetMinutes, false) : "")
+                + limitResetCountdown(policy.issuedAt, false) : "")
                 + (policy.monthlyMb > 0 ? " · месячный "
-                + limitResetCountdown(policy.serverOffsetMinutes, true) : "")
+                + limitResetCountdown(policy.issuedAt, true) : "")
                 + (warning.isEmpty() ? "" : "\n⚠ " + warning)
                 + (notificationsBlocked
                 ? "\n⚠ Уведомления запрещены Android — нажми сюда, чтобы включить." : ""));
@@ -2080,6 +2093,40 @@ public class MainActivity extends Activity {
         userLimitSummary.setTextColor(ratio >= 1.0 ? 0xFFFF7272
                 : ratio >= 0.8 ? 0xFFFFAA5B : 0xFFD7DAE0);
         userLimitSummary.setVisibility(View.VISIBLE);
+    }
+
+    private void updateUserTrafficLimitProgress(
+            UserAccessPolicy.Policy policy, UserAccessPolicy.Usage usage) {
+        boolean hasDaily = policy.dailyMb > 0;
+        boolean hasMonthly = policy.monthlyMb > 0;
+        userTrafficLimitPanel.setVisibility(
+                hasDaily || hasMonthly ? View.VISIBLE : View.GONE);
+        userDailyLimitGroup.setVisibility(hasDaily ? View.VISIBLE : View.GONE);
+        userMonthlyLimitGroup.setVisibility(hasMonthly ? View.VISIBLE : View.GONE);
+        if (hasDaily) {
+            setUserLimitProgress(userDailyLimitLabel, userDailyLimitProgress,
+                    "За 24 часа", usage.dayBytes, policy.dailyMb,
+                    limitResetCountdown(policy.issuedAt, false));
+        }
+        if (hasMonthly) {
+            setUserLimitProgress(userMonthlyLimitLabel, userMonthlyLimitProgress,
+                    "За 30 дней", usage.monthBytes, policy.monthlyMb,
+                    limitResetCountdown(policy.issuedAt, true));
+        }
+    }
+
+    private void setUserLimitProgress(
+            TextView label, ProgressBar bar, String period,
+            long usedBytes, long limitMb, String reset) {
+        double ratio = usedBytes / (limitMb * 1024.0 * 1024.0);
+        int percent = (int) Math.min(999, Math.max(0, ratio * 100));
+        label.setText(period + " · " + formatBytes(usedBytes)
+                + " из " + limitMb + " МБ · " + percent + "%\nСброс " + reset);
+        int color = ratio >= 1 ? 0xFFFF7272
+                : ratio >= 0.75 ? 0xFFFFAA5B : 0xFF77C68A;
+        label.setTextColor(color);
+        bar.setProgress((int) Math.min(1000, Math.max(0, ratio * 1000)));
+        bar.setProgressTintList(ColorStateList.valueOf(color));
     }
 
     private void showServerList() {
@@ -2853,17 +2900,10 @@ public class MainActivity extends Activity {
         return formatBytes(bytesPerSecond) + "/с";
     }
 
-    private String limitResetCountdown(long serverOffsetMinutes, boolean monthly) {
-        long safeOffset = Math.max(-18 * 60, Math.min(18 * 60, serverOffsetMinutes));
-        java.time.ZoneOffset offset = java.time.ZoneOffset.ofTotalSeconds(
-                (int) safeOffset * 60);
-        java.time.ZonedDateTime now = java.time.ZonedDateTime.now(offset);
-        java.time.LocalDate resetDate = monthly
-                ? now.toLocalDate().withDayOfMonth(1).plusMonths(1)
-                : now.toLocalDate().plusDays(1);
-        java.time.ZonedDateTime reset = resetDate.atStartOfDay(offset);
+    private String limitResetCountdown(long issuedAt, boolean monthly) {
+        long resetAt = UserAccessPolicy.nextResetAt(issuedAt, monthly);
         long minutes = Math.max(0,
-                (java.time.Duration.between(now, reset).getSeconds() + 59) / 60);
+                (resetAt - System.currentTimeMillis() / 1000L + 59) / 60);
         long days = minutes / (24 * 60);
         long hours = (minutes / 60) % 24;
         long remainingMinutes = minutes % 60;

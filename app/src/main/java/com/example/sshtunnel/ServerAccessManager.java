@@ -49,13 +49,14 @@ final class ServerAccessManager {
         final String policyError;
         final long statusUpdatedAt;
         final long serverOffsetMinutes;
+        final long issuedAt;
 
         ManagedUser(String label, String login, String password, String expires,
                     long dailyMb, long monthlyMb, long speedMbps, String accessCode,
                     long dayBytes, long monthBytes, boolean blocked,
                     boolean expired, boolean policyHealthy,
                     String policyError, long statusUpdatedAt,
-                    long serverOffsetMinutes) {
+                    long serverOffsetMinutes, long issuedAt) {
             this.label = label;
             this.login = login;
             this.password = password;
@@ -72,6 +73,7 @@ final class ServerAccessManager {
             this.policyError = policyError;
             this.statusUpdatedAt = statusUpdatedAt;
             this.serverOffsetMinutes = serverOffsetMinutes;
+            this.issuedAt = issuedAt;
         }
 
         boolean forever() {
@@ -267,7 +269,8 @@ final class ServerAccessManager {
                     item.optBoolean("policy_healthy", false),
                     item.optString("policy_error", ""),
                     item.optLong("status_updated_at", 0),
-                    item.optLong("server_offset_minutes", 0)));
+                    item.optLong("server_offset_minutes", 0),
+                    item.optLong("issued_at", 0)));
         }
         return users;
     }
@@ -353,7 +356,7 @@ final class ServerAccessManager {
                 "def write_policy(user):",
                 " try: account=pwd.getpwnam(user['login'])",
                 " except KeyError: return",
-                " data={'format':1,'expires':user.get('expires',''),'daily_mb':int(user.get('daily_mb',0)),'monthly_mb':int(user.get('monthly_mb',0)),'speed_mbps':int(user.get('speed_mbps',0)),'server_offset_minutes':server_offset_minutes(),'usage_reset_at':int(user.get('usage_reset_at',0))}",
+                " data={'format':1,'expires':user.get('expires',''),'daily_mb':int(user.get('daily_mb',0)),'monthly_mb':int(user.get('monthly_mb',0)),'speed_mbps':int(user.get('speed_mbps',0)),'server_offset_minutes':server_offset_minutes(),'usage_reset_at':int(user.get('usage_reset_at',0)),'issued_at':int(user.get('issued_at',int(time.time())))}",
                 " target=os.path.join(account.pw_dir,'.pelmeni-policy.json')",
                 " tmp=target+'.tmp-'+secrets.token_hex(8)",
                 " fd=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)",
@@ -362,9 +365,13 @@ final class ServerAccessManager {
                 " finally: os.close(fd)",
                 " os.replace(tmp,target)",
                 "def make_code(user):",
-                " data={'format':1,'name':profile.get('name',profile.get('host',''))+' · '+user.get('label',user['login']),'host':profile['host'],'ssh_port':str(profile.get('ssh_port',22)),'username':user['login'],'password':user['password'],'socks_port':str(profile.get('socks_port','1080')),'window_kib':profile.get('window_kib',1024),'packet_kib':profile.get('packet_kib',32),'mtu':profile.get('mtu',8500),'expires':user.get('expires',''),'daily_mb':int(user.get('daily_mb',0)),'monthly_mb':int(user.get('monthly_mb',0)),'speed_mbps':int(user.get('speed_mbps',0))}",
+                " data={'format':1,'name':profile.get('name',profile.get('host',''))+' · '+user.get('label',user['login']),'host':profile['host'],'ssh_port':str(profile.get('ssh_port',22)),'username':user['login'],'password':user['password'],'socks_port':str(profile.get('socks_port','1080')),'window_kib':profile.get('window_kib',1024),'packet_kib':profile.get('packet_kib',32),'mtu':profile.get('mtu',8500),'expires':user.get('expires',''),'daily_mb':int(user.get('daily_mb',0)),'monthly_mb':int(user.get('monthly_mb',0)),'speed_mbps':int(user.get('speed_mbps',0)),'issued_at':int(user.get('issued_at',int(time.time())))}",
                 " raw=json.dumps(data,ensure_ascii=False,separators=(',',':')).encode()",
                 " return 'PEL1-'+base64.urlsafe_b64encode(raw).decode().rstrip('=')",
+                "now=int(time.time()); legacy_changed=False",
+                "for existing in users:",
+                " if int(existing.get('issued_at',0))<=0: existing['issued_at']=now; legacy_changed=True",
+                "if legacy_changed: save()",
                 "try:",
                 " if action=='create':",
                 "  if any(x['login']==login for x in users): raise Exception('Такой логин уже существует.')",
@@ -372,6 +379,7 @@ final class ServerAccessManager {
                 "  except KeyError: pass",
                 "  alphabet=string.ascii_letters+string.digits",
                 "  req['password']=''.join(secrets.choice(alphabet) for _ in range(24))",
+                "  req['issued_at']=int(time.time())",
                 "  days=int(req.pop('days',0)); req['expires']=str(datetime.date.today()+datetime.timedelta(days=days)) if days>0 else ''",
                 "  req['access_code']=make_code(req)",
                 "  shell('useradd','-m','-g','pelmeni-vpn','-s','/bin/bash',login)",
@@ -412,8 +420,9 @@ final class ServerAccessManager {
                 "  subprocess.run(['systemctl','stop','pelmeni-user-policy.service'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)",
                 "  try: usage=json.load(open(usage_path,encoding='utf-8'))",
                 "  except Exception: usage={}",
-                "  today=str(datetime.date.today()); month=today[:7]",
-                "  usage[login]={'day':today,'month':month,'day_bytes':0,'month_bytes':0,'last':0,'blocked':False}",
+                "  current=next(x for x in users if x['login']==login)",
+                "  now=int(time.time()); origin=int(current.get('issued_at',now))",
+                "  usage[login]={'day_period':max(0,(now-origin)//86400),'month_period':max(0,(now-origin)//2592000),'day_bytes':0,'month_bytes':0,'last':0,'blocked':False}",
                 "  save_json(usage_path,usage)",
                 " elif action=='revoke':",
                 "  users[:]=[x for x in users if x['login']!=login]",
@@ -422,6 +431,7 @@ final class ServerAccessManager {
                 " elif action=='import':",
                 "  for incoming in req.get('users',[]):",
                 "   name=incoming['login']",
+                "   if int(incoming.get('issued_at',0))<=0: incoming['issued_at']=int(time.time())",
                 "   try: pwd.getpwnam(name)",
                 "   except KeyError: shell('useradd','-m','-g','pelmeni-vpn','-s','/bin/bash',name)",
                 "   shell('usermod','-g','pelmeni-vpn',name)",
@@ -514,21 +524,23 @@ final class ServerAccessManager {
                 " return out",
                 "def main():",
                 " users=load(users_path,[]); state=load(state_path,{})",
-                " today=str(datetime.date.today()); month=today[:7]",
+                " now_seconds=int(time.time())",
                 " for u in users:",
-                "  s=state.setdefault(u['login'],{'day':today,'month':month,'day_bytes':0,'month_bytes':0,'last':0,'blocked':False})",
-                "  if s.get('day')!=today: s.update(day=today,day_bytes=0)",
-                "  if s.get('month')!=month: s.update(month=month,month_bytes=0)",
+                "  origin=int(u.get('issued_at',now_seconds)); day_period=max(0,(now_seconds-origin)//86400); month_period=max(0,(now_seconds-origin)//2592000)",
+                "  s=state.setdefault(u['login'],{'day_period':day_period,'month_period':month_period,'day_bytes':0,'month_bytes':0,'last':0,'blocked':False})",
+                "  if s.get('day_period')!=day_period: s.update(day_period=day_period,day_bytes=0)",
+                "  if s.get('month_period')!=month_period: s.update(month_period=month_period,month_bytes=0)",
                 " rebuild(users,state)",
                 " for s in state.values(): s['last']=0",
                 " save_json(state_path,state)",
                 " while True:",
                 "  time.sleep(2); users=load(users_path,[]); now=counters(); changed=False",
-                "  today=str(datetime.date.today()); month=today[:7]",
+                "  now_seconds=int(time.time())",
                 "  for u in users:",
-                "   name=u['login']; s=state.setdefault(name,{'day':today,'month':month,'day_bytes':0,'month_bytes':0,'last':0,'blocked':False})",
-                "   if s.get('day')!=today: s.update(day=today,day_bytes=0); changed=True",
-                "   if s.get('month')!=month: s.update(month=month,month_bytes=0); changed=True",
+                "   name=u['login']; origin=int(u.get('issued_at',now_seconds)); day_period=max(0,(now_seconds-origin)//86400); month_period=max(0,(now_seconds-origin)//2592000)",
+                "   s=state.setdefault(name,{'day_period':day_period,'month_period':month_period,'day_bytes':0,'month_bytes':0,'last':0,'blocked':False})",
+                "   if s.get('day_period')!=day_period: s.update(day_period=day_period,day_bytes=0); changed=True",
+                "   if s.get('month_period')!=month_period: s.update(month_period=month_period,month_bytes=0); changed=True",
                 "   raw=now.get(name,0); delta=max(0,raw-s.get('last',0)); s['last']=raw; s['day_bytes']=s.get('day_bytes',0)+delta; s['month_bytes']=s.get('month_bytes',0)+delta",
                 "   was=bool(s.get('blocked',False)); block=(u.get('daily_mb',0)>0 and s['day_bytes']>=u['daily_mb']*1048576) or (u.get('monthly_mb',0)>0 and s['month_bytes']>=u['monthly_mb']*1048576)",
                 "   s['blocked']=block; changed=changed or was!=block",

@@ -61,8 +61,6 @@ public final class ConnectionRingView extends View {
         arc.setShadowLayer(dp(5 + 2 * Math.abs(pulse)), 0, 0, 0xAAFF9B4A);
         float start = phase * 360f - 90f;
         canvas.drawArc(bounds, start, 105f, false, arc);
-        arc.setAlpha(125);
-        canvas.drawArc(bounds, start + 185f, 32f, false, arc);
     }
 
     @Override protected void onDetachedFromWindow() {

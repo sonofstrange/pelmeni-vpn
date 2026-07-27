@@ -77,13 +77,26 @@ final class ServerAccessManager {
     }
 
     static List<ManagedUser> list(SecureStore store) throws Exception {
-        return decodeUsers(run(storeCredentials(store), "list",
-                new JSONObject().put("code_profile", codeProfile(store))));
+        return list(store, ServerProfiles.active(store));
+    }
+
+    static List<ManagedUser> list(
+            SecureStore store, ServerProfiles.Profile profile) throws Exception {
+        return decodeUsers(run(profileCredentials(store, profile), "list",
+                new JSONObject().put("code_profile", codeProfile(profile))));
     }
 
     static ManagedUser create(SecureStore store, String label, String requestedLogin,
                               int days, long dailyMb, long monthlyMb, long speedMbps)
             throws Exception {
+        return create(store, ServerProfiles.active(store), label, requestedLogin,
+                days, dailyMb, monthlyMb, speedMbps);
+    }
+
+    static ManagedUser create(
+            SecureStore store, ServerProfiles.Profile profile,
+            String label, String requestedLogin, int days,
+            long dailyMb, long monthlyMb, long speedMbps) throws Exception {
         String login = normalizeLogin(requestedLogin);
         JSONObject request = new JSONObject()
                 .put("label", label.trim())
@@ -92,8 +105,9 @@ final class ServerAccessManager {
                 .put("daily_mb", dailyMb)
                 .put("monthly_mb", monthlyMb)
                 .put("speed_mbps", speedMbps)
-                .put("code_profile", codeProfile(store));
-        List<ManagedUser> users = decodeUsers(run(storeCredentials(store), "create", request));
+                .put("code_profile", codeProfile(profile));
+        List<ManagedUser> users = decodeUsers(
+                run(profileCredentials(store, profile), "create", request));
         for (ManagedUser user : users) {
             if (user.login.equals(login)) return user;
         }
@@ -101,14 +115,24 @@ final class ServerAccessManager {
     }
 
     static void extend(SecureStore store, String login, int days) throws Exception {
+        extend(store, ServerProfiles.active(store), login, days);
+    }
+
+    static void extend(SecureStore store, ServerProfiles.Profile profile,
+                       String login, int days) throws Exception {
         JSONObject request = new JSONObject()
                 .put("login", login)
                 .put("days", days);
-        run(storeCredentials(store), "extend", request);
+        run(profileCredentials(store, profile), "extend", request);
     }
 
     static void revoke(SecureStore store, String login) throws Exception {
-        run(storeCredentials(store), "revoke",
+        revoke(store, ServerProfiles.active(store), login);
+    }
+
+    static void revoke(SecureStore store, ServerProfiles.Profile profile,
+                       String login) throws Exception {
+        run(profileCredentials(store, profile), "revoke",
                 new JSONObject().put("login", login));
     }
 
@@ -146,6 +170,19 @@ final class ServerAccessManager {
             throw new Exception("Неверный SSH-порт.");
         }
         return new Credentials(host, port, user, password);
+    }
+
+    private static Credentials profileCredentials(
+            SecureStore store, ServerProfiles.Profile profile) throws Exception {
+        if (profile == null) throw new Exception("Сервер не выбран.");
+        String password = ServerProfiles.password(store, profile.id);
+        if (password.isEmpty()) throw new Exception("Нет пароля администратора сервера.");
+        try {
+            return new Credentials(profile.host, Integer.parseInt(profile.sshPort),
+                    profile.user, password);
+        } catch (NumberFormatException error) {
+            throw new Exception("Неверный SSH-порт.");
+        }
     }
 
     private static String run(Credentials credentials, String action, JSONObject request)
@@ -219,8 +256,7 @@ final class ServerAccessManager {
         return login;
     }
 
-    private static JSONObject codeProfile(SecureStore store) throws Exception {
-        ServerProfiles.Profile profile = ServerProfiles.active(store);
+    private static JSONObject codeProfile(ServerProfiles.Profile profile) throws Exception {
         if (profile == null) throw new Exception("Нет активного сервера.");
         return new JSONObject()
                 .put("name", profile.name)

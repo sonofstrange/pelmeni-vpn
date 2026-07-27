@@ -18,7 +18,7 @@ public class TunnelService extends Service {
     public static final String ACTION_STATUS = "com.example.sshtunnel.STATUS";
 
     private static final String CHANNEL = "tunnel";
-    private static final String LIMIT_CHANNEL = "user_limits";
+    private static final String LIMIT_CHANNEL = "user_limits_v2";
     private static final int ID = 42;
     private static final int LIMIT_ID = 43;
 
@@ -600,6 +600,9 @@ public class TunnelService extends Service {
                 .setContentText(alert.text)
                 .setStyle(new Notification.BigTextStyle().bigText(alert.text))
                 .setAutoCancel(true)
+                .setCategory(Notification.CATEGORY_ALARM)
+                .setPriority(Notification.PRIORITY_MAX)
+                .setDefaults(Notification.DEFAULT_ALL)
                 .setContentIntent(contentIntent)
                 .build();
         getSystemService(NotificationManager.class).notify(LIMIT_ID, notification);
@@ -628,6 +631,14 @@ public class TunnelService extends Service {
         String metrics = "Скорость: " + formatRate(currentSpeed) + " · Пинг: " + latency;
         SecureStore store = new SecureStore(this);
         ServerProfiles.Profile activeProfile = ServerProfiles.active(store);
+        String limitWarning = "";
+        if (activeProfile != null) {
+            UserAccessPolicy.Policy policy = UserAccessPolicy.load(store, activeProfile.id);
+            if (policy.configured) {
+                limitWarning = UserAccessPolicy.warning(
+                        policy, UserAccessPolicy.usage(store, activeProfile.id));
+            }
+        }
         String title = Branding.appName(this)
                 + (activeProfile == null ? "" : " · " + activeProfile.name)
                 + " · " + TunnelMode.label(store);
@@ -636,7 +647,8 @@ public class TunnelService extends Service {
                 .setContentTitle(title)
                 .setContentText(metrics)
                 .setSubText(text)
-                .setStyle(new Notification.BigTextStyle().bigText(text + "\n" + metrics))
+                .setStyle(new Notification.BigTextStyle().bigText(text + "\n" + metrics
+                        + (limitWarning.isEmpty() ? "" : "\n⚠ " + limitWarning)))
                 .setOngoing(wanted)
                 .setContentIntent(contentIntent)
                 .addAction(new Notification.Action.Builder(null, "Отключить", stopIntent).build())
@@ -655,9 +667,10 @@ public class TunnelService extends Service {
         if (Build.VERSION.SDK_INT >= 26) {
             getSystemService(NotificationManager.class).createNotificationChannel(
                     new NotificationChannel(CHANNEL, "Пельмени VPN", NotificationManager.IMPORTANCE_LOW));
-            getSystemService(NotificationManager.class).createNotificationChannel(
-                    new NotificationChannel(LIMIT_CHANNEL,
-                            "Лимиты пользователей", NotificationManager.IMPORTANCE_HIGH));
+            NotificationChannel limits = new NotificationChannel(LIMIT_CHANNEL,
+                    "Предупреждения о лимитах", NotificationManager.IMPORTANCE_HIGH);
+            limits.enableVibration(true);
+            getSystemService(NotificationManager.class).createNotificationChannel(limits);
         }
     }
 

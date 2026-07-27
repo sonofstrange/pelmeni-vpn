@@ -116,13 +116,32 @@ final class UserAccessPolicy {
         if (limitMb <= 0) return 0;
         double ratio = bytes / (limitMb * 1024.0 * 1024.0);
         if (ratio >= 1.0) return 100;
-        if (ratio >= 0.95) return 95;
-        if (ratio >= 0.80) return 80;
+        if (ratio >= 0.90) return 90;
+        if (ratio >= 0.75) return 75;
         return 0;
+    }
+
+    static String warning(Policy policy, Usage usage) {
+        double daily = policy.dailyMb <= 0 ? 0
+                : usage.dayBytes / (policy.dailyMb * 1024.0 * 1024.0);
+        double monthly = policy.monthlyMb <= 0 ? 0
+                : usage.monthBytes / (policy.monthlyMb * 1024.0 * 1024.0);
+        double ratio = Math.max(daily, monthly);
+        if (ratio < 0.75) return "";
+        String period = daily >= monthly ? "дневного" : "месячного";
+        return ratio >= 1
+                ? "Лимит " + period + " трафика исчерпан"
+                : "Осталось около " + Math.max(0, 100 - (int) (ratio * 100))
+                + "% " + period + " лимита";
     }
 
     private static void normalizeUsage(SecureStore store, String profileId) {
         String prefix = prefix(profileId);
+        if (store.getLong(prefix + "notice_version", 0) != 2) {
+            store.putLong(prefix + "notice_version", 2);
+            store.putLong(prefix + "day_notice", 0);
+            store.putLong(prefix + "month_notice", 0);
+        }
         String today = LocalDate.now().toString();
         String month = YearMonth.now().toString();
         if (!today.equals(store.getPlain(prefix + "day", ""))) {

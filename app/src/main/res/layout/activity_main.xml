@@ -122,6 +122,30 @@
                 </FrameLayout>
             </LinearLayout>
 
+            <LinearLayout
+                android:id="@+id/splitRouteProgress"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:visibility="gone">
+
+                <ProgressBar
+                    android:layout_width="22dp"
+                    android:layout_height="22dp"
+                    android:indeterminate="true"
+                    android:indeterminateTint="#FFAA5B" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp"
+                    android:text="Применяем раздельное туннелирование…"
+                    android:textColor="#FFAA5B"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
             <TextView
                 android:id="@+id/speedPing"
                 android:layout_width="match_parent"

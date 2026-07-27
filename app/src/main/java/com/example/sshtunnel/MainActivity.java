@@ -10,6 +10,7 @@ import android.content.BroadcastReceiver;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.res.ColorStateList;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.net.Uri;
@@ -17,6 +18,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.Settings;
 import android.net.VpnService;
 import android.graphics.Bitmap;
 import android.graphics.drawable.Icon;
@@ -28,6 +30,7 @@ import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.RadioButton;
 import android.widget.RadioGroup;
 import android.widget.ScrollView;
@@ -79,10 +82,13 @@ public class MainActivity extends Activity {
     private FrameLayout contentContainer;
     private View navHome, navPeople, navSettings, navAdd;
     private View activePage;
+    private View splitRouteProgress;
+    private String peopleServerId;
     private boolean running;
     private boolean proxyConnecting;
     private boolean vpnConnecting;
     private boolean waitingForVpnReady;
+    private boolean routingApplying;
     private boolean receiverRegistered;
     private boolean suppressModeChanges;
     private boolean pendingLiveVpnPermission;
@@ -133,6 +139,7 @@ public class MainActivity extends Activity {
         toggleVpn = findViewById(R.id.toggleVpn);
         ringTelegram = findViewById(R.id.ringTelegram);
         ringVpn = findViewById(R.id.ringVpn);
+        splitRouteProgress = findViewById(R.id.splitRouteProgress);
         save = findViewById(R.id.save);
         serverSelect = findViewById(R.id.serverSelect);
         serverEdit = findViewById(R.id.serverEdit);
@@ -239,15 +246,38 @@ public class MainActivity extends Activity {
     private void showPeoplePage(
             List<ServerAccessManager.ManagedUser> users, String loadError) {
         SecureStore store = new SecureStore(this);
-        ServerProfiles.Profile active = ServerProfiles.active(store);
+        ServerProfiles.Profile active = peopleServer(store);
         LinearLayout page = createPageContent("Люди",
                 active == null ? "Доступ к VPN" : "Пользователи сервера «" + active.name + "»");
         addPageAction(page, "Ввести код доступа",
                 "Добавить готовый сервер, которым с тобой поделились",
                 this::showImportAccessCode);
         if (active == null) {
+            addCardSubtitle(page,
+                    "Добавь профиль администратора с root/sudo, чтобы управлять пользователями.");
             showScrollablePage(page, navPeople);
             return;
+        }
+        List<ServerProfiles.Profile> adminServers = adminServers(store);
+        if (adminServers.size() > 1) {
+            addSectionTitle(page, "Сервер администратора");
+            LinearLayout selector = createCard();
+            RadioGroup choices = new RadioGroup(this);
+            for (ServerProfiles.Profile server : adminServers) {
+                RadioButton choice = createRadio(server.name,
+                        server.host + ":" + server.sshPort);
+                choice.setTag(server.id);
+                choice.setChecked(server.id.equals(active.id));
+                choices.addView(choice);
+            }
+            choices.setOnCheckedChangeListener((group, id) -> {
+                RadioButton selected = group.findViewById(id);
+                if (selected == null) return;
+                peopleServerId = String.valueOf(selected.getTag());
+                showPeoplePage(null, null);
+            });
+            selector.addView(choices);
+            page.addView(selector, pageCardParams());
         }
         addSectionTitle(page, "Управление сервером");
         addPageAction(page, "Добавить человека",
@@ -377,25 +407,90 @@ public class MainActivity extends Activity {
         if (!managed.policyHealthy && !managed.policyError.isEmpty()) {
             message += "\nОшибка: " + managed.policyError;
         }
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(22), dp(4), dp(22), 0);
+        TextView details = new TextView(this);
+        details.setText(message);
+        details.setTextColor(0xFFE1E3E8);
+        details.setTextSize(14);
+        content.addView(details);
+        if (managed.dailyMb > 0) {
+            addLimitProgress(content, "Дневной трафик",
+                    managed.dayBytes, managed.dailyMb);
+        }
+        if (managed.monthlyMb > 0) {
+            addLimitProgress(content, "Месячный трафик",
+                    managed.monthBytes, managed.monthlyMb);
+        }
         new AlertDialog.Builder(this)
                 .setTitle(managed.label)
-                .setMessage(message)
+                .setView(content)
                 .setPositiveButton("Обновить", (dialog, which) -> loadManagedUsers())
                 .setNegativeButton("Закрыть", null)
                 .show();
     }
 
+    private void addLimitProgress(
+            LinearLayout parent, String title, long usedBytes, long limitMb) {
+        double ratio = usedBytes / (limitMb * 1024.0 * 1024.0);
+        TextView label = new TextView(this);
+        label.setText(title + " · " + Math.min(100, (int) (ratio * 100)) + "%");
+        label.setTextColor(ratio >= 1 ? 0xFFFF7272
+                : ratio >= 0.75 ? 0xFFFFAA5B : 0xFFD7DAE0);
+        label.setTextSize(13);
+        label.setPadding(0, dp(16), 0, dp(5));
+        parent.addView(label);
+        ProgressBar bar = new ProgressBar(
+                this, null, android.R.attr.progressBarStyleHorizontal);
+        bar.setMax(1000);
+        bar.setProgress((int) Math.min(1000, ratio * 1000));
+        bar.setProgressTintList(ColorStateList.valueOf(
+                ratio >= 1 ? 0xFFFF7272 : ratio >= 0.75 ? 0xFFFFAA5B : 0xFF77C68A));
+        parent.addView(bar, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(10)));
+    }
+
     private void loadManagedUsers() {
+        ServerProfiles.Profile server = peopleServer(new SecureStore(this));
         speedWorker.execute(() -> {
             try {
                 List<ServerAccessManager.ManagedUser> users =
-                        ServerAccessManager.list(new SecureStore(this));
+                        ServerAccessManager.list(new SecureStore(this), server);
                 mainHandler.post(() -> showPeoplePage(users, null));
             } catch (Exception error) {
                 mainHandler.post(() -> showPeoplePage(null,
                         error.getMessage() == null ? "Неизвестная ошибка." : error.getMessage()));
             }
         });
+    }
+
+    private List<ServerProfiles.Profile> adminServers(SecureStore store) {
+        List<ServerProfiles.Profile> result = new java.util.ArrayList<>();
+        for (ServerProfiles.Profile profile : ServerProfiles.list(store)) {
+            if (!profile.user.startsWith("pel_")
+                    && !ServerProfiles.password(store, profile.id).isEmpty()) {
+                result.add(profile);
+            }
+        }
+        return result;
+    }
+
+    private ServerProfiles.Profile peopleServer(SecureStore store) {
+        List<ServerProfiles.Profile> servers = adminServers(store);
+        for (ServerProfiles.Profile profile : servers) {
+            if (profile.id.equals(peopleServerId)) return profile;
+        }
+        ServerProfiles.Profile active = ServerProfiles.active(store);
+        for (ServerProfiles.Profile profile : servers) {
+            if (active != null && profile.id.equals(active.id)) {
+                peopleServerId = profile.id;
+                return profile;
+            }
+        }
+        if (servers.isEmpty()) return null;
+        peopleServerId = servers.get(0).id;
+        return servers.get(0);
     }
 
     private void showAddServerChoice() {
@@ -504,7 +599,8 @@ public class MainActivity extends Activity {
             speedWorker.execute(() -> {
                 try {
                     ServerAccessManager.ManagedUser managed = ServerAccessManager.create(
-                            new SecureStore(this), finalDisplayName, finalLogin, (int) daysValue,
+                            new SecureStore(this), peopleServer(new SecureStore(this)),
+                            finalDisplayName, finalLogin, (int) daysValue,
                             dailyValue, monthlyValue, speedValue);
                     mainHandler.post(() -> {
                         showAccessCode(managed);
@@ -621,7 +717,9 @@ public class MainActivity extends Activity {
     private void runExtendManagedUser(ServerAccessManager.ManagedUser managed, int days) {
         speedWorker.execute(() -> {
             try {
-                ServerAccessManager.extend(new SecureStore(this), managed.login, days);
+                SecureStore store = new SecureStore(this);
+                ServerAccessManager.extend(
+                        store, peopleServer(store), managed.login, days);
                 mainHandler.post(() -> {
                     Toast.makeText(this, "Срок обновлён", Toast.LENGTH_SHORT).show();
                     showPeoplePage(null, null);
@@ -639,7 +737,9 @@ public class MainActivity extends Activity {
                 .setMessage("Linux-учётная запись будет удалена с сервера. Старый код перестанет работать.")
                 .setPositiveButton("Отозвать", (dialog, which) -> speedWorker.execute(() -> {
                     try {
-                        ServerAccessManager.revoke(new SecureStore(this), managed.login);
+                        SecureStore store = new SecureStore(this);
+                        ServerAccessManager.revoke(
+                                store, peopleServer(store), managed.login);
                         mainHandler.post(() -> showPeoplePage(null, null));
                     } catch (Exception error) {
                         mainHandler.post(() ->
@@ -1133,6 +1233,8 @@ public class MainActivity extends Activity {
                         .setAction(VpnTunnelService.RELOAD_ROUTES), store);
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(reload);
         else startService(reload);
+        routingApplying = true;
+        updateModeButtons();
         Toast.makeText(this, "Применяем маршруты…",
                 Toast.LENGTH_SHORT).show();
     }
@@ -1731,6 +1833,8 @@ public class MainActivity extends Activity {
         toggleVpn.setActivated(vpnActive && !vpnConnecting);
         ringTelegram.setConnecting(proxyConnecting);
         ringVpn.setConnecting(vpnConnecting);
+        splitRouteProgress.setVisibility(routingApplying
+                ? View.VISIBLE : View.GONE);
     }
 
     private boolean saveSettings() {
@@ -1831,8 +1935,20 @@ public class MainActivity extends Activity {
                 : "без месячного лимита";
         String speed = policy.speedMbps > 0
                 ? policy.speedMbps + " Мбит/с" : "без ограничения скорости";
+        String warning = UserAccessPolicy.warning(policy, usage);
+        boolean notificationsBlocked = Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED;
         userLimitSummary.setText("Ваш доступ · " + expiry + "\n"
-                + daily + " · " + monthly + "\nСкорость: " + speed);
+                + daily + " · " + monthly + "\nСкорость: " + speed
+                + (warning.isEmpty() ? "" : "\n⚠ " + warning)
+                + (notificationsBlocked
+                ? "\n⚠ Уведомления запрещены Android — нажми сюда, чтобы включить." : ""));
+        userLimitSummary.setOnClickListener(notificationsBlocked ? v -> {
+            Intent settings = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName());
+            startActivity(settings);
+        } : null);
         double ratio = Math.max(
                 policy.dailyMb > 0
                         ? usage.dayBytes / (policy.dailyMb * 1024.0 * 1024.0) : 0,
@@ -2009,9 +2125,9 @@ public class MainActivity extends Activity {
                 profile == null ? "" : ServerProfiles.password(store, profile.id),
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         if (sharedAccess) {
-            profileHost.setEnabled(false);
-            profileUser.setEnabled(false);
-            profilePassword.setEnabled(false);
+            ((View) profileHost.getParent()).setVisibility(View.GONE);
+            ((View) profileUser.getParent()).setVisibility(View.GONE);
+            ((View) profilePassword.getParent()).setVisibility(View.GONE);
             LinearLayout shared = createCard();
             addCardTitle(shared, "Личный профиль");
             addCardSubtitle(shared,
@@ -2034,8 +2150,11 @@ public class MainActivity extends Activity {
         EditText profileSshPort = addServerField(page, "SSH-порт",
                 profile == null ? "22" : profile.sshPort,
                 InputType.TYPE_CLASS_NUMBER);
-        if (sharedAccess) profileSshPort.setEnabled(false);
-        addQuickChoices(page, profileSshPort, "22", "443", "2222");
+        if (sharedAccess) {
+            ((View) profileSshPort.getParent()).setVisibility(View.GONE);
+        } else {
+            addQuickChoices(page, profileSshPort, "22", "443", "2222");
+        }
         EditText profileSocksPort = addServerField(page, "Локальный SOCKS5-порт",
                 profile == null ? "1080" : profile.socksPort,
                 InputType.TYPE_CLASS_NUMBER);
@@ -2846,11 +2965,13 @@ public class MainActivity extends Activity {
             waitingForVpnReady = false;
             proxyConnecting = false;
             vpnConnecting = false;
+            routingApplying = false;
             return;
         }
         if (text.startsWith("VPN подключён")) {
             waitingForVpnReady = false;
             vpnConnecting = false;
+            routingApplying = false;
             return;
         }
         if (text.startsWith("Ошибка запуска VPN")
@@ -2858,6 +2979,7 @@ public class MainActivity extends Activity {
                 || text.startsWith("SOCKS5 не запустился")) {
             waitingForVpnReady = false;
             vpnConnecting = false;
+            routingApplying = false;
             return;
         }
         if (!enableVpn.isChecked()) {
@@ -2866,6 +2988,8 @@ public class MainActivity extends Activity {
         }
         if (text.startsWith("Подключено")) {
             proxyConnecting = false;
+            routingApplying = waitingForVpnReady
+                    && SplitTunnel.enabled(new SecureStore(this));
             if (!waitingForVpnReady) vpnConnecting = false;
             return;
         }

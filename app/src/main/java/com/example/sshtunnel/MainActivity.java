@@ -68,9 +68,11 @@ public class MainActivity extends Activity {
 
     private EditText host, sshPort, user, password, socksPort;
     private TextView appTitle, status, speedPing, debugInfo, serverName, serverAddress;
+    private TextView userLimitSummary;
     private TextView splitTunnelSummary;
     private TextView sessionDown, sessionUp, totalDown, totalUp;
-    private Button toggle, save, serverSelect, serverEdit, splitTunnelButton;
+    private Button toggle, toggleTelegram, toggleVpn;
+    private Button save, serverSelect, serverEdit, splitTunnelButton;
     private CheckBox showPassword, autoReconnect, startOnBoot, enableVpn, enableTelegram;
     private ScrollView mainScroll;
     private FrameLayout contentContainer;
@@ -89,6 +91,14 @@ public class MainActivity extends Activity {
     private final BroadcastReceiver receiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
             if (intent.hasExtra("speed_bps")) updateStats(intent);
+            String limitWarning = intent.getStringExtra("limit_warning");
+            if (limitWarning != null) {
+                new AlertDialog.Builder(MainActivity.this)
+                        .setTitle("Лимит доступа")
+                        .setMessage(limitWarning)
+                        .setPositiveButton("Понятно", null)
+                        .show();
+            }
             update(intent.getStringExtra("status"));
         }
     };
@@ -105,6 +115,7 @@ public class MainActivity extends Activity {
         appTitle = findViewById(R.id.appTitle);
         status = findViewById(R.id.status);
         speedPing = findViewById(R.id.speedPing);
+        userLimitSummary = findViewById(R.id.userLimitSummary);
         debugInfo = findViewById(R.id.debugInfo);
         sessionDown = findViewById(R.id.sessionDown);
         sessionUp = findViewById(R.id.sessionUp);
@@ -114,6 +125,8 @@ public class MainActivity extends Activity {
         serverAddress = findViewById(R.id.serverAddress);
         splitTunnelSummary = findViewById(R.id.splitTunnelSummary);
         toggle = findViewById(R.id.toggle);
+        toggleTelegram = findViewById(R.id.toggleTelegram);
+        toggleVpn = findViewById(R.id.toggleVpn);
         save = findViewById(R.id.save);
         serverSelect = findViewById(R.id.serverSelect);
         serverEdit = findViewById(R.id.serverEdit);
@@ -161,13 +174,17 @@ public class MainActivity extends Activity {
         enableVpn.setOnCheckedChangeListener((button, checked) -> {
             if (suppressModeChanges) return;
             new SecureStore(this).putBoolean("vpn_mode", checked);
+            updateModeButtons();
             applyLiveModeChange(true, checked);
         });
         enableTelegram.setOnCheckedChangeListener((button, checked) -> {
             if (suppressModeChanges) return;
             new SecureStore(this).putBoolean("telegram_proxy", checked);
+            updateModeButtons();
             applyLiveModeChange(false, checked);
         });
+        toggleTelegram.setOnClickListener(v -> toggleModeFromButton(false));
+        toggleVpn.setOnClickListener(v -> toggleModeFromButton(true));
 
         save.setOnClickListener(v -> {
             if (saveSettings()) {
@@ -745,6 +762,9 @@ public class MainActivity extends Activity {
         for (int i = 0; i < group.getChildCount(); i++) {
             View child = group.getChildAt(i);
             if (child instanceof TextView) ((TextView) child).setTextColor(color);
+            if (child instanceof ImageView) {
+                ((ImageView) child).setColorFilter(color);
+            }
         }
     }
 
@@ -1653,6 +1673,39 @@ public class MainActivity extends Activity {
         }
         updateSplitSummary();
         updateServerCard();
+        updateModeButtons();
+        updateAccessLimitSummary();
+    }
+
+    private void toggleModeFromButton(boolean vpn) {
+        if (!running) {
+            suppressModeChanges = true;
+            try {
+                enableVpn.setChecked(vpn);
+                enableTelegram.setChecked(!vpn);
+            } finally {
+                suppressModeChanges = false;
+            }
+            SecureStore store = new SecureStore(this);
+            store.putBoolean("vpn_mode", vpn);
+            store.putBoolean("telegram_proxy", !vpn);
+            updateModeButtons();
+            startTunnel();
+            return;
+        }
+        CheckBox target = vpn ? enableVpn : enableTelegram;
+        target.setChecked(!target.isChecked());
+    }
+
+    private void updateModeButtons() {
+        boolean proxyActive = running && enableTelegram.isChecked();
+        boolean vpnActive = running && enableVpn.isChecked();
+        toggleTelegram.setText(proxyActive ? "ПРОКСИ\nВКЛЮЧЕН" : "ПРОКСИ\nВКЛЮЧИТЬ");
+        toggleVpn.setText(vpnActive ? "VPN\nВКЛЮЧЕН" : "VPN\nВКЛЮЧИТЬ");
+        toggleTelegram.setTextColor(proxyActive ? 0xFFFFAA5B : 0xFFB8BBC3);
+        toggleVpn.setTextColor(vpnActive ? 0xFFFFAA5B : 0xFFB8BBC3);
+        toggleTelegram.setActivated(proxyActive);
+        toggleVpn.setActivated(vpnActive);
     }
 
     private boolean saveSettings() {
@@ -1720,6 +1773,7 @@ public class MainActivity extends Activity {
             serverAddress.setText("Добавь первый сервер");
             serverSelect.setText("ДОБАВИТЬ");
             serverEdit.setText("ДОБАВИТЬ");
+            userLimitSummary.setVisibility(View.GONE);
             return;
         }
         serverName.setText(active.name);
@@ -1727,6 +1781,41 @@ public class MainActivity extends Activity {
                 + " · " + active.user);
         serverSelect.setText("СМЕНИТЬ");
         serverEdit.setText("ПАРАМЕТРЫ");
+        updateAccessLimitSummary();
+    }
+
+    private void updateAccessLimitSummary() {
+        SecureStore store = new SecureStore(this);
+        ServerProfiles.Profile profile = ServerProfiles.active(store);
+        if (profile == null) {
+            userLimitSummary.setVisibility(View.GONE);
+            return;
+        }
+        UserAccessPolicy.Policy policy = UserAccessPolicy.load(store, profile.id);
+        if (!policy.configured) {
+            userLimitSummary.setVisibility(View.GONE);
+            return;
+        }
+        UserAccessPolicy.Usage usage = UserAccessPolicy.usage(store, profile.id);
+        String expiry = policy.expires.isEmpty() ? "бессрочно" : "до " + policy.expires;
+        String daily = policy.dailyMb > 0
+                ? formatBytes(usage.dayBytes) + " из " + policy.dailyMb + " МБ сегодня"
+                : "без дневного лимита";
+        String monthly = policy.monthlyMb > 0
+                ? formatBytes(usage.monthBytes) + " из " + policy.monthlyMb + " МБ за месяц"
+                : "без месячного лимита";
+        String speed = policy.speedMbps > 0
+                ? policy.speedMbps + " Мбит/с" : "без ограничения скорости";
+        userLimitSummary.setText("Ваш доступ · " + expiry + "\n"
+                + daily + " · " + monthly + "\nСкорость: " + speed);
+        double ratio = Math.max(
+                policy.dailyMb > 0
+                        ? usage.dayBytes / (policy.dailyMb * 1024.0 * 1024.0) : 0,
+                policy.monthlyMb > 0
+                        ? usage.monthBytes / (policy.monthlyMb * 1024.0 * 1024.0) : 0);
+        userLimitSummary.setTextColor(ratio >= 1.0 ? 0xFFFF7272
+                : ratio >= 0.8 ? 0xFFFFAA5B : 0xFFD7DAE0);
+        userLimitSummary.setVisibility(View.VISIBLE);
     }
 
     private void showServerList() {
@@ -1904,6 +1993,17 @@ public class MainActivity extends Activity {
             addCardTitle(shared, "Личный профиль");
             addCardSubtitle(shared,
                     "Название меняется только у тебя. Адрес, логин и пароль управляются владельцем сервера.");
+            UserAccessPolicy.Policy access = UserAccessPolicy.load(store, profile.id);
+            if (access.configured) {
+                addCardSubtitle(shared,
+                        "Срок: " + (access.expires.isEmpty() ? "бессрочно" : "до " + access.expires)
+                                + "\nДень: " + (access.dailyMb > 0
+                                ? access.dailyMb + " МБ" : "без лимита")
+                                + " · месяц: " + (access.monthlyMb > 0
+                                ? access.monthlyMb + " МБ" : "без лимита")
+                                + "\nСкорость: " + (access.speedMbps > 0
+                                ? access.speedMbps + " Мбит/с" : "без ограничения"));
+            }
             page.addView(shared, pageCardParams());
         }
 
@@ -2438,6 +2538,7 @@ public class MainActivity extends Activity {
                 intent.getLongExtra("session_downloaded", 0),
                 intent.getLongExtra("total_uploaded", 0),
                 intent.getLongExtra("total_downloaded", 0));
+        updateAccessLimitSummary();
         if (Branding.isSecret(this) && intent.getBooleanExtra("debug_enabled", false)) {
             debugInfo.setText("Версия: " + intent.getStringExtra("debug_version")
                     + "\nПрофиль: " + intent.getStringExtra("debug_profile")
@@ -2692,6 +2793,7 @@ public class MainActivity extends Activity {
         running = !text.equals("Отключено");
         toggle.setText(running ? "ОТКЛЮЧИТЬ" : "ПОДКЛЮЧИТЬ");
         toggle.setActivated(running);
+        updateModeButtons();
         setSettingsEnabled(!running);
         updateDebugPanel();
     }
@@ -2708,6 +2810,8 @@ public class MainActivity extends Activity {
         startOnBoot.setEnabled(enabled);
         enableVpn.setEnabled(true);
         enableTelegram.setEnabled(true);
+        toggleVpn.setEnabled(true);
+        toggleTelegram.setEnabled(true);
         serverSelect.setEnabled(true);
         serverEdit.setEnabled(enabled);
     }

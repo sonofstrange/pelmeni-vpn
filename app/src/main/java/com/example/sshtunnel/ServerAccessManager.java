@@ -284,7 +284,7 @@ final class ServerAccessManager {
                 "login=req.get('login','')",
                 "profile=req.pop('code_profile',{})",
                 "def make_code(user):",
-                " data={'format':1,'name':profile.get('name',profile.get('host',''))+' · '+user.get('label',user['login']),'host':profile['host'],'ssh_port':str(profile.get('ssh_port',22)),'username':user['login'],'password':user['password'],'socks_port':str(profile.get('socks_port','1080')),'window_kib':profile.get('window_kib',1024),'packet_kib':profile.get('packet_kib',32),'mtu':profile.get('mtu',8500)}",
+                " data={'format':1,'name':profile.get('name',profile.get('host',''))+' · '+user.get('label',user['login']),'host':profile['host'],'ssh_port':str(profile.get('ssh_port',22)),'username':user['login'],'password':user['password'],'socks_port':str(profile.get('socks_port','1080')),'window_kib':profile.get('window_kib',1024),'packet_kib':profile.get('packet_kib',32),'mtu':profile.get('mtu',8500),'expires':user.get('expires',''),'daily_mb':int(user.get('daily_mb',0)),'monthly_mb':int(user.get('monthly_mb',0)),'speed_mbps':int(user.get('speed_mbps',0))}",
                 " raw=json.dumps(data,ensure_ascii=False,separators=(',',':')).encode()",
                 " return 'PEL1-'+base64.urlsafe_b64encode(raw).decode().rstrip('=')",
                 "try:",

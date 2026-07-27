@@ -29,13 +29,31 @@ final class ServerAccessCode {
         if (host.isEmpty() || username.isEmpty() || password.isEmpty()) {
             throw new Exception("Код доступа повреждён.");
         }
-        ServerProfiles.Profile profile = ServerProfiles.create(
-                json.optString("name", host),
-                host, sshPort, username, socksPort,
-                json.optInt("window_kib", NetworkTuning.DEFAULT_WINDOW_KIB),
-                json.optInt("packet_kib", NetworkTuning.DEFAULT_PACKET_KIB),
-                json.optInt("mtu", NetworkTuning.DEFAULT_MTU));
+        ServerProfiles.Profile existing = null;
+        for (ServerProfiles.Profile candidate : ServerProfiles.list(store)) {
+            if (candidate.host.equalsIgnoreCase(host)
+                    && candidate.user.equals(username)) {
+                existing = candidate;
+                break;
+            }
+        }
+        ServerProfiles.Profile profile;
+        if (existing == null) {
+            profile = ServerProfiles.create(
+                    json.optString("name", host),
+                    host, sshPort, username, socksPort,
+                    json.optInt("window_kib", NetworkTuning.DEFAULT_WINDOW_KIB),
+                    json.optInt("packet_kib", NetworkTuning.DEFAULT_PACKET_KIB),
+                    json.optInt("mtu", NetworkTuning.DEFAULT_MTU));
+        } else {
+            profile = new ServerProfiles.Profile(
+                    existing.id, existing.name, host, sshPort, username, socksPort,
+                    json.optInt("window_kib", existing.windowKiB),
+                    json.optInt("packet_kib", existing.packetKiB),
+                    json.optInt("mtu", existing.mtu));
+        }
         ServerProfiles.saveAndActivate(store, profile, password);
+        UserAccessPolicy.saveFromCode(store, profile.id, json);
         return profile;
     }
 

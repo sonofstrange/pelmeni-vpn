@@ -57,17 +57,41 @@
 
             <Button
                 android:id="@+id/toggle"
-                android:layout_width="210dp"
-                android:layout_height="210dp"
-                android:layout_gravity="center_horizontal"
-                android:layout_marginTop="12dp"
-                android:background="@drawable/connect_button_background"
-                android:gravity="center"
-                android:padding="20dp"
-                android:text="ПОДКЛЮЧИТЬ"
-                android:textColor="#FFB166"
-                android:textSize="19sp"
-                android:textStyle="bold" />
+                android:layout_width="1dp"
+                android:layout_height="1dp"
+                android:visibility="gone" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="96dp"
+                android:layout_marginTop="16dp"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/toggleTelegram"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:background="@drawable/settings_action_background"
+                    android:gravity="center"
+                    android:text="ПРОКСИ&#10;ВКЛЮЧИТЬ"
+                    android:textColor="#B8BBC3"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <Button
+                    android:id="@+id/toggleVpn"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_marginStart="10dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/settings_action_background"
+                    android:gravity="center"
+                    android:text="VPN&#10;ВКЛЮЧИТЬ"
+                    android:textColor="#B8BBC3"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
 
             <TextView
                 android:id="@+id/speedPing"
@@ -78,6 +102,17 @@
                 android:text="Скорость: 0 Б/с · Пинг: —"
                 android:textColor="#A6ABB5"
                 android:textSize="15sp" />
+
+            <TextView
+                android:id="@+id/userLimitSummary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:background="@drawable/panel_background"
+                android:padding="14dp"
+                android:textColor="#D7DAE0"
+                android:textSize="14sp"
+                android:visibility="gone" />
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -102,7 +137,8 @@
                     android:layout_marginTop="8dp"
                     android:text="VPN для всего телефона"
                     android:textColor="#ECEEF1"
-                    android:textSize="16sp" />
+                    android:textSize="16sp"
+                    android:visibility="gone" />
 
                 <TextView
                     android:layout_width="match_parent"
@@ -110,7 +146,8 @@
                     android:paddingStart="34dp"
                     android:text="Можно включать и выключать отдельно, не останавливая прокси Telegram."
                     android:textColor="#8F949F"
-                    android:textSize="13sp" />
+                    android:textSize="13sp"
+                    android:visibility="gone" />
 
                 <CheckBox
                     android:id="@+id/enableTelegram"
@@ -120,7 +157,8 @@
                     android:checked="true"
                     android:text="Локальный прокси для Telegram"
                     android:textColor="#ECEEF1"
-                    android:textSize="16sp" />
+                    android:textSize="16sp"
+                    android:visibility="gone" />
 
                 <TextView
                     android:layout_width="match_parent"
@@ -128,7 +166,8 @@
                     android:paddingStart="34dp"
                     android:text="Оставь включённым постоянно, а VPN добавляй только когда он нужен."
                     android:textColor="#8F949F"
-                    android:textSize="13sp" />
+                    android:textSize="13sp"
+                    android:visibility="gone" />
 
                 <Button
                     android:id="@+id/splitTunnelButton"
@@ -454,13 +493,12 @@
             android:gravity="center"
             android:orientation="vertical">
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="BETA"
-                android:textColor="#B8BBC3"
-                android:textSize="21sp"
-                android:textStyle="bold" />
+            <ImageView
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:contentDescription="Люди"
+                android:src="@drawable/ic_people"
+                android:tint="#B8BBC3" />
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"

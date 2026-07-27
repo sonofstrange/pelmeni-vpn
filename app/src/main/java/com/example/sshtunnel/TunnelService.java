@@ -18,7 +18,9 @@ public class TunnelService extends Service {
     public static final String ACTION_STATUS = "com.example.sshtunnel.STATUS";
 
     private static final String CHANNEL = "tunnel";
+    private static final String LIMIT_CHANNEL = "user_limits";
     private static final int ID = 42;
+    private static final int LIMIT_ID = 43;
 
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final ScheduledExecutorService statsWorker = Executors.newSingleThreadScheduledExecutor();
@@ -40,6 +42,7 @@ public class TunnelService extends Service {
     private long totalUploaded;
     private long totalDownloaded;
     private long lastSampleBytes;
+    private long lastPolicyBytes;
     private long lastSampleTime;
     private int statsTicks;
     private volatile String currentStatus = "Подключение…";
@@ -99,6 +102,7 @@ public class TunnelService extends Service {
             sessionUploaded = 0;
             sessionDownloaded = 0;
             lastSampleBytes = 0;
+            lastPolicyBytes = 0;
             lastSampleTime = SystemClock.elapsedRealtime();
             statsTicks = 0;
             serviceStartedAt = lastSampleTime;
@@ -433,6 +437,7 @@ public class TunnelService extends Service {
 
         statsTicks++;
         if (statsTicks % 30 == 0) persistTotals();
+        if (statsTicks % 5 == 0) recordPolicyUsage(bytes);
 
         Intent statsIntent = new Intent(ACTION_STATUS).setPackage(getPackageName())
                 .putExtra("speed_bps", speed)
@@ -570,9 +575,36 @@ public class TunnelService extends Service {
 
     private void persistTotals() {
         long[] traffic = trafficSnapshot();
+        recordPolicyUsage(traffic[0] + traffic[1]);
         SecureStore store = new SecureStore(this);
         store.putLong("total_uploaded", totalUploaded + traffic[0]);
         store.putLong("total_downloaded", totalDownloaded + traffic[1]);
+    }
+
+    private void recordPolicyUsage(long currentBytes) {
+        long added = Math.max(0, currentBytes - lastPolicyBytes);
+        lastPolicyBytes = currentBytes;
+        if (added <= 0) return;
+        SecureStore store = new SecureStore(this);
+        ServerProfiles.Profile profile = ServerProfiles.active(store);
+        if (profile == null) return;
+        UserAccessPolicy.Alert alert =
+                UserAccessPolicy.record(store, profile.id, added);
+        if (alert == null) return;
+        Intent open = new Intent(this, MainActivity.class);
+        PendingIntent contentIntent = PendingIntent.getActivity(this, LIMIT_ID, open,
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        Notification notification = new Notification.Builder(this, LIMIT_CHANNEL)
+                .setSmallIcon(android.R.drawable.stat_notify_error)
+                .setContentTitle(alert.title)
+                .setContentText(alert.text)
+                .setStyle(new Notification.BigTextStyle().bigText(alert.text))
+                .setAutoCancel(true)
+                .setContentIntent(contentIntent)
+                .build();
+        getSystemService(NotificationManager.class).notify(LIMIT_ID, notification);
+        sendBroadcast(new Intent(ACTION_STATUS).setPackage(getPackageName())
+                .putExtra("limit_warning", alert.title + "\n" + alert.text));
     }
 
     private void send(String text) {
@@ -623,6 +655,9 @@ public class TunnelService extends Service {
         if (Build.VERSION.SDK_INT >= 26) {
             getSystemService(NotificationManager.class).createNotificationChannel(
                     new NotificationChannel(CHANNEL, "Пельмени VPN", NotificationManager.IMPORTANCE_LOW));
+            getSystemService(NotificationManager.class).createNotificationChannel(
+                    new NotificationChannel(LIMIT_CHANNEL,
+                            "Лимиты пользователей", NotificationManager.IMPORTANCE_HIGH));
         }
     }
 

@@ -1,9 +1,6 @@
 package com.example.sshtunnel;
 
 import android.Manifest;
-import android.animation.ObjectAnimator;
-import android.animation.PropertyValuesHolder;
-import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.StatusBarManager;
@@ -25,7 +22,6 @@ import android.graphics.Bitmap;
 import android.graphics.drawable.Icon;
 import android.text.InputType;
 import android.view.View;
-import android.view.animation.DecelerateInterpolator;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
@@ -76,6 +72,7 @@ public class MainActivity extends Activity {
     private TextView splitTunnelSummary;
     private TextView sessionDown, sessionUp, totalDown, totalUp;
     private Button toggle, toggleTelegram, toggleVpn;
+    private ConnectionRingView ringTelegram, ringVpn;
     private Button save, serverSelect, serverEdit, splitTunnelButton;
     private CheckBox showPassword, autoReconnect, startOnBoot, enableVpn, enableTelegram;
     private ScrollView mainScroll;
@@ -86,8 +83,6 @@ public class MainActivity extends Activity {
     private boolean proxyConnecting;
     private boolean vpnConnecting;
     private boolean waitingForVpnReady;
-    private ObjectAnimator proxyConnectingAnimator;
-    private ObjectAnimator vpnConnectingAnimator;
     private boolean receiverRegistered;
     private boolean suppressModeChanges;
     private boolean pendingLiveVpnPermission;
@@ -136,6 +131,8 @@ public class MainActivity extends Activity {
         toggle = findViewById(R.id.toggle);
         toggleTelegram = findViewById(R.id.toggleTelegram);
         toggleVpn = findViewById(R.id.toggleVpn);
+        ringTelegram = findViewById(R.id.ringTelegram);
+        ringVpn = findViewById(R.id.ringVpn);
         save = findViewById(R.id.save);
         serverSelect = findViewById(R.id.serverSelect);
         serverEdit = findViewById(R.id.serverEdit);
@@ -160,7 +157,10 @@ public class MainActivity extends Activity {
         loadSettings();
         running = new SecureStore(this).getBoolean("enabled", false)
                 && TunnelService.isActive();
-        update(running ? "Сервис запущен, проверяем соединение…" : "Отключено");
+        update(!running ? "Отключено"
+                : TunnelService.isConnected()
+                ? "Подключено · " + TunnelMode.portsLabel(new SecureStore(this))
+                : "Подключение…");
 
         showStoredTotals();
 
@@ -1658,8 +1658,8 @@ public class MainActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
-        if (proxyConnectingAnimator != null) proxyConnectingAnimator.cancel();
-        if (vpnConnectingAnimator != null) vpnConnectingAnimator.cancel();
+        ringTelegram.setConnecting(false);
+        ringVpn.setConnecting(false);
         speedWorker.shutdownNow();
         super.onDestroy();
     }
@@ -1727,37 +1727,10 @@ public class MainActivity extends Activity {
                 : vpnActive ? "VPN\nВКЛЮЧЕН" : "VPN\nВКЛЮЧИТЬ");
         toggleTelegram.setTextColor(proxyActive ? 0xFFFFAA5B : 0xFFB8BBC3);
         toggleVpn.setTextColor(vpnActive ? 0xFFFFAA5B : 0xFFB8BBC3);
-        toggleTelegram.setActivated(proxyActive);
-        toggleVpn.setActivated(vpnActive);
-        proxyConnectingAnimator = syncConnectingAnimation(
-                proxyConnectingAnimator, toggleTelegram,
-                proxyConnecting);
-        vpnConnectingAnimator = syncConnectingAnimation(
-                vpnConnectingAnimator, toggleVpn,
-                vpnConnecting);
-    }
-
-    private ObjectAnimator syncConnectingAnimation(
-            ObjectAnimator animator, Button button, boolean shouldRun) {
-        if (animator == null) {
-            animator = ObjectAnimator.ofPropertyValuesHolder(button,
-                    PropertyValuesHolder.ofFloat(View.SCALE_X, 0.96f, 1.04f),
-                    PropertyValuesHolder.ofFloat(View.SCALE_Y, 0.96f, 1.04f),
-                    PropertyValuesHolder.ofFloat(View.ALPHA, 0.62f, 1f));
-            animator.setDuration(560);
-            animator.setRepeatCount(ValueAnimator.INFINITE);
-            animator.setRepeatMode(ValueAnimator.REVERSE);
-            animator.setInterpolator(new DecelerateInterpolator());
-        }
-        if (shouldRun && !animator.isStarted()) {
-            animator.start();
-        } else if (!shouldRun && animator.isStarted()) {
-            animator.cancel();
-            button.setScaleX(1f);
-            button.setScaleY(1f);
-            button.setAlpha(1f);
-        }
-        return animator;
+        toggleTelegram.setActivated(proxyActive && !proxyConnecting);
+        toggleVpn.setActivated(vpnActive && !vpnConnecting);
+        ringTelegram.setConnecting(proxyConnecting);
+        ringVpn.setConnecting(vpnConnecting);
     }
 
     private boolean saveSettings() {

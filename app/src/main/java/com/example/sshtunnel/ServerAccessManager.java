@@ -136,6 +136,23 @@ final class ServerAccessManager {
                 new JSONObject().put("login", login));
     }
 
+    static ManagedUser updateLimits(
+            SecureStore store, ServerProfiles.Profile profile, String login,
+            long dailyMb, long monthlyMb, long speedMbps) throws Exception {
+        JSONObject request = new JSONObject()
+                .put("login", login)
+                .put("daily_mb", dailyMb)
+                .put("monthly_mb", monthlyMb)
+                .put("speed_mbps", speedMbps)
+                .put("code_profile", codeProfile(profile));
+        List<ManagedUser> users = decodeUsers(
+                run(profileCredentials(store, profile), "limits", request));
+        for (ManagedUser user : users) {
+            if (user.login.equals(login)) return user;
+        }
+        throw new Exception("Сервер не вернул обновлённого пользователя.");
+    }
+
     static JSONArray exportUsers(SecureStore store) throws Exception {
         return new JSONArray(run(storeCredentials(store), "export", null));
     }
@@ -351,6 +368,16 @@ final class ServerAccessManager {
                 "  if not found: raise Exception('Пользователь не найден.')",
                 "  current=next(x for x in users if x['login']==login)",
                 "  shell('chage','-E',current.get('expires') or '-1',login); save()",
+                " elif action=='limits':",
+                "  found=False",
+                "  for x in users:",
+                "   if x['login']==login:",
+                "    x['daily_mb']=max(0,int(req.get('daily_mb',0)))",
+                "    x['monthly_mb']=max(0,int(req.get('monthly_mb',0)))",
+                "    x['speed_mbps']=max(0,int(req.get('speed_mbps',0)))",
+                "    x['access_code']=make_code(x); found=True",
+                "  if not found: raise Exception('Пользователь не найден.')",
+                "  save()",
                 " elif action=='revoke':",
                 "  users[:]=[x for x in users if x['login']!=login]",
                 "  subprocess.run(['userdel','-r',login],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)",

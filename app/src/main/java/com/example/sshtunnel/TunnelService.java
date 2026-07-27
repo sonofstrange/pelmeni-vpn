@@ -605,7 +605,8 @@ public class TunnelService extends Service {
                 .setDefaults(Notification.DEFAULT_ALL)
                 .setContentIntent(contentIntent)
                 .build();
-        getSystemService(NotificationManager.class).notify(LIMIT_ID, notification);
+        getSystemService(NotificationManager.class).notify(
+                alert.critical ? LIMIT_ID + 1 : LIMIT_ID, notification);
         sendBroadcast(new Intent(ACTION_STATUS).setPackage(getPackageName())
                 .putExtra("limit_warning", alert.title + "\n" + alert.text));
     }

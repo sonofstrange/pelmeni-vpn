@@ -343,6 +343,11 @@ public class MainActivity extends Activity {
             addUserAction(secondary, "ОТОЗВАТЬ", true,
                     () -> confirmRevokeManagedUser(managed), true);
             actions.addView(secondary);
+            LinearLayout limits = createUserActionRow();
+            limits.setPadding(0, dp(8), 0, 0);
+            addUserAction(limits, "ИЗМЕНИТЬ ЛИМИТЫ", false,
+                    () -> showEditManagedUserLimits(managed), false);
+            actions.addView(limits);
             card.addView(actions);
             page.addView(card, pageCardParams());
         }
@@ -712,6 +717,61 @@ public class MainActivity extends Activity {
                 })
                 .setNegativeButton("Отмена", null)
                 .show();
+    }
+
+    private void showEditManagedUserLimits(
+            ServerAccessManager.ManagedUser managed) {
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(20), dp(4), dp(20), 0);
+        EditText daily = addServerField(content, "Трафик в день · МБ",
+                Long.toString(managed.dailyMb), InputType.TYPE_CLASS_NUMBER);
+        EditText monthly = addServerField(content, "Трафик в месяц · МБ",
+                Long.toString(managed.monthlyMb), InputType.TYPE_CLASS_NUMBER);
+        EditText speed = addServerField(content, "Скорость · Мбит/с",
+                Long.toString(managed.speedMbps), InputType.TYPE_CLASS_NUMBER);
+        TextView note = new TextView(this);
+        note.setText("0 означает отсутствие ограничения. После сохранения отправь пользователю обновлённый QR-код.");
+        note.setTextColor(0xFF9297A2);
+        note.setTextSize(13);
+        content.addView(note);
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Лимиты · " + managed.label)
+                .setView(content)
+                .setPositiveButton("Сохранить", null)
+                .setNegativeButton("Отмена", null)
+                .create();
+        dialog.setOnShowListener(ignored ->
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                    long dayValue = parseLongOrNegative(daily);
+                    long monthValue = parseLongOrNegative(monthly);
+                    long speedValue = parseLongOrNegative(speed);
+                    if (dayValue < 0 || monthValue < 0 || speedValue < 0) {
+                        Toast.makeText(this, "Лимиты должны быть целыми числами от 0",
+                                Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    dialog.dismiss();
+                    speedWorker.execute(() -> {
+                        try {
+                            SecureStore store = new SecureStore(this);
+                            ServerAccessManager.ManagedUser updated =
+                                    ServerAccessManager.updateLimits(
+                                            store, peopleServer(store), managed.login,
+                                            dayValue, monthValue, speedValue);
+                            mainHandler.post(() -> {
+                                Toast.makeText(this, "Лимиты применены",
+                                        Toast.LENGTH_SHORT).show();
+                                showAccessCode(updated);
+                                showPeoplePage(null, null);
+                            });
+                        } catch (Exception error) {
+                            mainHandler.post(() -> Toast.makeText(
+                                    this, error.getMessage(), Toast.LENGTH_LONG).show());
+                        }
+                    });
+                }));
+        dialog.show();
     }
 
     private void runExtendManagedUser(ServerAccessManager.ManagedUser managed, int days) {

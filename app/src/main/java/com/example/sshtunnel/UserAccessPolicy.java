@@ -40,21 +40,29 @@ final class UserAccessPolicy {
     static final class Alert {
         final String title;
         final String text;
+        final boolean critical;
 
-        Alert(String title, String text) {
+        Alert(String title, String text, boolean critical) {
             this.title = title;
             this.text = text;
+            this.critical = critical;
         }
     }
 
     static void saveFromCode(
             SecureStore store, String profileId, JSONObject code) {
         String prefix = prefix(profileId);
+        long dailyMb = Math.max(0, code.optLong("daily_mb", 0));
+        long monthlyMb = Math.max(0, code.optLong("monthly_mb", 0));
+        boolean dailyChanged = dailyMb != store.getLong(prefix + "daily_mb", 0);
+        boolean monthlyChanged = monthlyMb != store.getLong(prefix + "monthly_mb", 0);
         store.putBoolean(prefix + "configured", true);
         store.putPlain(prefix + "expires", code.optString("expires", ""));
-        store.putLong(prefix + "daily_mb", Math.max(0, code.optLong("daily_mb", 0)));
-        store.putLong(prefix + "monthly_mb", Math.max(0, code.optLong("monthly_mb", 0)));
+        store.putLong(prefix + "daily_mb", dailyMb);
+        store.putLong(prefix + "monthly_mb", monthlyMb);
         store.putLong(prefix + "speed_mbps", Math.max(0, code.optLong("speed_mbps", 0)));
+        if (dailyChanged) store.putLong(prefix + "day_notice", 0);
+        if (monthlyChanged) store.putLong(prefix + "month_notice", 0);
         normalizeUsage(store, profileId);
     }
 
@@ -105,11 +113,12 @@ final class UserAccessPolicy {
         if (alertLevel >= 100) {
             return new Alert("Лимит трафика достигнут",
                     "Использовано " + formatMb(used) + " из " + limitMb
-                            + " МБ " + period + " лимита. Сервер остановит трафик.");
+                            + " МБ " + period + " лимита. Сервер остановит трафик.",
+                    true);
         }
         return new Alert("Заканчивается трафик",
                 "Использовано " + alertLevel + "% " + period + " лимита: "
-                        + formatMb(used) + " из " + limitMb + " МБ.");
+                        + formatMb(used) + " из " + limitMb + " МБ.", false);
     }
 
     private static int level(long bytes, long limitMb) {

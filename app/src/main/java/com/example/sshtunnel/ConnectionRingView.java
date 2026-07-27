@@ -53,12 +53,14 @@ public final class ConnectionRingView extends View {
 
     @Override protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
-        float pulse = (float) Math.sin(phase * Math.PI * 2);
-        float inset = dp(4.5f) - pulse * dp(0.8f);
-        bounds.set(inset, inset, getWidth() - inset, getHeight() - inset);
-        canvas.drawOval(bounds, track);
-        arc.setAlpha((int) (210 + 45 * Math.abs(pulse)));
-        arc.setShadowLayer(dp(5 + 2 * Math.abs(pulse)), 0, 0, 0xAAFF9B4A);
+        float radius = Math.min(getWidth(), getHeight()) / 2f - dp(5);
+        float centerX = getWidth() / 2f;
+        float centerY = getHeight() / 2f;
+        bounds.set(centerX - radius, centerY - radius,
+                centerX + radius, centerY + radius);
+        canvas.drawCircle(centerX, centerY, radius, track);
+        arc.setAlpha(255);
+        arc.setShadowLayer(dp(5), 0, 0, 0x99FF9B4A);
         float start = phase * 360f - 90f;
         canvas.drawArc(bounds, start, 105f, false, arc);
     }

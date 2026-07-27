@@ -2,6 +2,7 @@ package com.example.sshtunnel;
 
 /** Shared client-side quota and bandwidth limiter for all proxy modes. */
 final class UserTrafficLimiter {
+    private static final long MAX_FINAL_BLOCK_OVERAGE = 32 * 1024L;
     private long dailyLimitBytes;
     private long monthlyLimitBytes;
     private long bytesPerSecond;
@@ -41,14 +42,17 @@ final class UserTrafficLimiter {
 
     synchronized int acquire(int requested) throws InterruptedException {
         refreshPeriods();
-        long allowed = requested;
+        long remaining = Long.MAX_VALUE;
         if (dailyLimitBytes > 0) {
-            allowed = Math.min(allowed, Math.max(0, dailyLimitBytes - dayUsed));
+            remaining = Math.min(remaining, dailyLimitBytes - dayUsed);
         }
         if (monthlyLimitBytes > 0) {
-            allowed = Math.min(allowed, Math.max(0, monthlyLimitBytes - monthUsed));
+            remaining = Math.min(remaining, monthlyLimitBytes - monthUsed);
         }
-        if (allowed <= 0) return 0;
+        if (remaining <= 0) return 0;
+        long withOverage = remaining > Long.MAX_VALUE - MAX_FINAL_BLOCK_OVERAGE
+                ? Long.MAX_VALUE : remaining + MAX_FINAL_BLOCK_OVERAGE;
+        long allowed = Math.min(requested, withOverage);
         throttle(allowed);
         dayUsed += allowed;
         monthUsed += allowed;

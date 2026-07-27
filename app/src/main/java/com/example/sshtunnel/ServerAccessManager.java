@@ -13,8 +13,6 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
-import java.security.SecureRandom;
-import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -42,9 +40,10 @@ final class ServerAccessManager {
         final long dailyMb;
         final long monthlyMb;
         final long speedMbps;
+        final String accessCode;
 
         ManagedUser(String label, String login, String password, String expires,
-                    long dailyMb, long monthlyMb, long speedMbps) {
+                    long dailyMb, long monthlyMb, long speedMbps, String accessCode) {
             this.label = label;
             this.login = login;
             this.password = password;
@@ -52,6 +51,7 @@ final class ServerAccessManager {
             this.dailyMb = dailyMb;
             this.monthlyMb = monthlyMb;
             this.speedMbps = speedMbps;
+            this.accessCode = accessCode;
         }
 
         boolean forever() {
@@ -60,22 +60,22 @@ final class ServerAccessManager {
     }
 
     static List<ManagedUser> list(SecureStore store) throws Exception {
-        return decodeUsers(run(storeCredentials(store), "list", null));
+        return decodeUsers(run(storeCredentials(store), "list",
+                new JSONObject().put("code_profile", codeProfile(store))));
     }
 
     static ManagedUser create(SecureStore store, String label, String requestedLogin,
                               int days, long dailyMb, long monthlyMb, long speedMbps)
             throws Exception {
         String login = normalizeLogin(requestedLogin);
-        String generatedPassword = randomPassword();
         JSONObject request = new JSONObject()
                 .put("label", label.trim())
                 .put("login", login)
-                .put("password", generatedPassword)
-                .put("expires", days <= 0 ? "" : LocalDate.now().plusDays(days).toString())
+                .put("days", days)
                 .put("daily_mb", dailyMb)
                 .put("monthly_mb", monthlyMb)
-                .put("speed_mbps", speedMbps);
+                .put("speed_mbps", speedMbps)
+                .put("code_profile", codeProfile(store));
         List<ManagedUser> users = decodeUsers(run(storeCredentials(store), "create", request));
         for (ManagedUser user : users) {
             if (user.login.equals(login)) return user;
@@ -99,8 +99,20 @@ final class ServerAccessManager {
         return new JSONArray(run(storeCredentials(store), "export", null));
     }
 
-    static void importUsers(Credentials destination, JSONArray users) throws Exception {
-        run(destination, "import", new JSONObject().put("users", users));
+    static void importUsers(Credentials destination, JSONArray users,
+                            String serverName, String socksPort,
+                            int windowKiB, int packetKiB, int mtu) throws Exception {
+        JSONObject profile = new JSONObject()
+                .put("name", serverName)
+                .put("host", destination.host)
+                .put("ssh_port", destination.port)
+                .put("socks_port", socksPort)
+                .put("window_kib", windowKiB)
+                .put("packet_kib", packetKiB)
+                .put("mtu", mtu);
+        run(destination, "import", new JSONObject()
+                .put("users", users)
+                .put("code_profile", profile));
     }
 
     static Credentials storeCredentials(SecureStore store) throws Exception {
@@ -166,7 +178,8 @@ final class ServerAccessManager {
                     item.optString("expires", ""),
                     item.optLong("daily_mb", 0),
                     item.optLong("monthly_mb", 0),
-                    item.optLong("speed_mbps", 0)));
+                    item.optLong("speed_mbps", 0),
+                    item.optString("access_code", "")));
         }
         return users;
     }
@@ -182,12 +195,17 @@ final class ServerAccessManager {
         return login;
     }
 
-    private static String randomPassword() {
-        final String chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
-        SecureRandom random = new SecureRandom();
-        StringBuilder value = new StringBuilder();
-        for (int i = 0; i < 24; i++) value.append(chars.charAt(random.nextInt(chars.length())));
-        return value.toString();
+    private static JSONObject codeProfile(SecureStore store) throws Exception {
+        ServerProfiles.Profile profile = ServerProfiles.active(store);
+        if (profile == null) throw new Exception("Нет активного сервера.");
+        return new JSONObject()
+                .put("name", profile.name)
+                .put("host", profile.host)
+                .put("ssh_port", Integer.parseInt(profile.sshPort))
+                .put("socks_port", profile.socksPort)
+                .put("window_kib", profile.windowKiB)
+                .put("packet_kib", profile.packetKiB)
+                .put("mtu", profile.mtu);
     }
 
     private static String managementScript(String action, String payload) {
@@ -229,7 +247,7 @@ final class ServerAccessManager {
 
     private static String workerPython() {
         return String.join("\n",
-                "import base64,datetime,json,os,pwd,subprocess,sys",
+                "import base64,datetime,json,os,pwd,secrets,string,subprocess,sys",
                 "path='/etc/pelmeni-vpn/users.json'",
                 "action=sys.argv[1]",
                 "req=json.loads(base64.b64decode(sys.argv[2]).decode()) if len(sys.argv)>2 and sys.argv[2] else {}",
@@ -240,11 +258,20 @@ final class ServerAccessManager {
                 " tmp=path+'.tmp'; open(tmp,'w',encoding='utf-8').write(json.dumps(users,ensure_ascii=False)); os.chmod(tmp,0o600); os.replace(tmp,path)",
                 "def shell(*args,input=None): subprocess.run(args,input=input,text=True,check=True,stdout=subprocess.DEVNULL)",
                 "login=req.get('login','')",
+                "profile=req.pop('code_profile',{})",
+                "def make_code(user):",
+                " data={'format':1,'name':profile.get('name',profile.get('host',''))+' · '+user.get('label',user['login']),'host':profile['host'],'ssh_port':str(profile.get('ssh_port',22)),'username':user['login'],'password':user['password'],'socks_port':str(profile.get('socks_port','1080')),'window_kib':profile.get('window_kib',1024),'packet_kib':profile.get('packet_kib',32),'mtu':profile.get('mtu',8500)}",
+                " raw=json.dumps(data,ensure_ascii=False,separators=(',',':')).encode()",
+                " return 'PEL1-'+base64.urlsafe_b64encode(raw).decode().rstrip('=')",
                 "try:",
                 " if action=='create':",
                 "  if any(x['login']==login for x in users): raise Exception('Такой логин уже существует.')",
                 "  try: pwd.getpwnam(login); raise Exception('Такой Linux-пользователь уже существует.')",
                 "  except KeyError: pass",
+                "  alphabet=string.ascii_letters+string.digits",
+                "  req['password']=''.join(secrets.choice(alphabet) for _ in range(24))",
+                "  days=int(req.pop('days',0)); req['expires']=str(datetime.date.today()+datetime.timedelta(days=days)) if days>0 else ''",
+                "  req['access_code']=make_code(req)",
                 "  shell('useradd','-m','-g','pelmeni-vpn','-s','/bin/bash',login)",
                 "  shell('chpasswd',input=login+':'+req['password']+'\\n')",
                 "  shell('chage','-E',req.get('expires') or '-1',login)",
@@ -276,8 +303,15 @@ final class ServerAccessManager {
                 "   shell('usermod','-g','pelmeni-vpn',name)",
                 "   shell('chpasswd',input=name+':'+incoming['password']+'\\n')",
                 "   shell('chage','-E',incoming.get('expires') or '-1',name)",
+                "   incoming['access_code']=make_code(incoming)",
                 "   users=[x for x in users if x.get('login')!=name]; users.append(incoming)",
                 "  save()",
+                " elif action=='list' and profile:",
+                "  changed=False",
+                "  for x in users:",
+                "   code=make_code(x)",
+                "   if x.get('access_code')!=code: x['access_code']=code; changed=True",
+                "  if changed: save()",
                 " elif action not in ('list','export'): raise Exception('Неизвестная операция.')",
                 " subprocess.run(['systemctl','daemon-reload'],stdout=subprocess.DEVNULL)",
                 " subprocess.run(['systemctl','enable','--now','pelmeni-user-policy.service'],stdout=subprocess.DEVNULL)",

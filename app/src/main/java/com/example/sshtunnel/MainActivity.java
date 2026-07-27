@@ -171,14 +171,15 @@ public class MainActivity extends Activity {
         serverEdit.setOnClickListener(v -> {
             ServerProfiles.Profile active =
                     ServerProfiles.active(new SecureStore(this));
-            showServerEditor(active);
+            if (active == null) showAddServerChoice();
+            else showServerEditor(active);
         });
         findViewById(R.id.serverProfileCard).setOnClickListener(v -> showServerList());
         splitTunnelButton.setOnClickListener(v -> showSplitTunnelPage());
         navHome.setOnClickListener(v -> showHomePage());
         navPeople.setOnClickListener(v -> showPeoplePage(null, null));
         navSettings.setOnClickListener(v -> showSettingsHub());
-        navAdd.setOnClickListener(v -> showServerEditor(null));
+        navAdd.setOnClickListener(v -> showAddServerChoice());
         setSelectedNav(navHome);
         if (getIntent().getBooleanExtra(EXTRA_START_FROM_TILE, false)) {
             getIntent().removeExtra(EXTRA_START_FROM_TILE);
@@ -297,6 +298,22 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void showAddServerChoice() {
+        if (running) {
+            Toast.makeText(this, "Сначала отключи туннель", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        LinearLayout page = createPageContent("Добавить сервер",
+                "Выбери, как ты хочешь подключиться.");
+        addPageAction(page, "Настроить свой сервер",
+                "Ввести IP, SSH-пользователя, пароль и параметры сервера",
+                () -> showServerEditor(null));
+        addPageAction(page, "Добавить по коду",
+                "Вставить код, который создал владелец VPN-сервера",
+                this::showImportAccessCode);
+        showScrollablePage(page, navAdd);
+    }
+
     private void showImportAccessCode() {
         EditText input = new EditText(this);
         input.setHint("PEL1-…");
@@ -337,17 +354,9 @@ public class MainActivity extends Activity {
         EditText login = addServerField(page, "Логин · латиницей", "",
                 InputType.TYPE_CLASS_TEXT);
         addSectionTitle(page, "Срок действия");
-        RadioGroup expiry = new RadioGroup(this);
-        RadioButton forever = createRadio("Навсегда", "Доступ не истекает");
-        RadioButton day = createRadio("1 день", "Можно продлить позже");
-        RadioButton month = createRadio("30 дней", "Можно продлить позже");
-        expiry.addView(forever);
-        expiry.addView(day);
-        expiry.addView(month);
-        forever.setChecked(true);
-        LinearLayout expiryCard = createCard();
-        expiryCard.addView(expiry);
-        page.addView(expiryCard, pageCardParams());
+        EditText duration = addServerField(page, "Количество дней · 0 навсегда", "0",
+                InputType.TYPE_CLASS_NUMBER);
+        addQuickChoices(page, duration, "0", "1", "7", "30", "365");
         addSectionTitle(page, "Лимиты · 0 означает без ограничений");
         EditText daily = addServerField(page, "Трафик в день · МБ", "0",
                 InputType.TYPE_CLASS_NUMBER);
@@ -367,12 +376,13 @@ public class MainActivity extends Activity {
         create.setOnClickListener(v -> {
             String displayName = label.getText().toString().trim();
             if (displayName.isEmpty()) displayName = login.getText().toString().trim();
-            int days = day.isChecked() ? 1 : month.isChecked() ? 30 : 0;
+            long daysValue = parseLongOrNegative(duration);
             long dailyValue = parseLongOrNegative(daily);
             long monthlyValue = parseLongOrNegative(monthly);
             long speedValue = parseLongOrNegative(speed);
-            if (displayName.isEmpty() || dailyValue < 0 || monthlyValue < 0 || speedValue < 0) {
-                Toast.makeText(this, "Проверь имя и числовые лимиты", Toast.LENGTH_LONG).show();
+            if (displayName.isEmpty() || daysValue < 0 || daysValue > 36500
+                    || dailyValue < 0 || monthlyValue < 0 || speedValue < 0) {
+                Toast.makeText(this, "Проверь имя, срок и числовые лимиты", Toast.LENGTH_LONG).show();
                 return;
             }
             String finalDisplayName = displayName;
@@ -382,7 +392,7 @@ public class MainActivity extends Activity {
             speedWorker.execute(() -> {
                 try {
                     ServerAccessManager.ManagedUser managed = ServerAccessManager.create(
-                            new SecureStore(this), finalDisplayName, finalLogin, days,
+                            new SecureStore(this), finalDisplayName, finalLogin, (int) daysValue,
                             dailyValue, monthlyValue, speedValue);
                     mainHandler.post(() -> {
                         showAccessCode(managed);
@@ -410,7 +420,10 @@ public class MainActivity extends Activity {
 
     private void showAccessCode(ServerAccessManager.ManagedUser managed) {
         try {
-            String code = ServerAccessCode.create(new SecureStore(this), managed);
+            String code = managed.accessCode;
+            if (code == null || code.isEmpty()) {
+                throw new Exception("Сервер не вернул код доступа.");
+            }
             new AlertDialog.Builder(this)
                     .setTitle("Код для " + managed.label)
                     .setMessage(code + "\n\nКод содержит пароль пользователя. Отправляй его только тому, кому доверяешь.")
@@ -435,11 +448,27 @@ public class MainActivity extends Activity {
     }
 
     private void showExtendManagedUser(ServerAccessManager.ManagedUser managed) {
-        String[] options = {"Ещё на 1 день", "Ещё на 30 дней", "Сделать бессрочным"};
+        EditText days = new EditText(this);
+        days.setHint("Количество дней");
+        days.setText("30");
+        days.setInputType(InputType.TYPE_CLASS_NUMBER);
+        FrameLayout wrapper = new FrameLayout(this);
+        wrapper.setPadding(dp(20), 0, dp(20), 0);
+        wrapper.addView(days);
         new AlertDialog.Builder(this)
                 .setTitle("Продлить " + managed.label)
-                .setItems(options, (dialog, which) ->
-                        runExtendManagedUser(managed, which == 0 ? 1 : which == 1 ? 30 : 0))
+                .setMessage("Укажи любое количество дней. Они прибавятся к текущему сроку. 0 — сделать доступ бессрочным.")
+                .setView(wrapper)
+                .setPositiveButton("Применить", (dialog, which) -> {
+                    long value = parseLongOrNegative(days);
+                    if (value < 0 || value > 36500) {
+                        Toast.makeText(this, "Допустимо от 0 до 36500 дней",
+                                Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    runExtendManagedUser(managed, (int) value);
+                })
+                .setNegativeButton("Отмена", null)
                 .show();
     }
 
@@ -1592,7 +1621,7 @@ public class MainActivity extends Activity {
         SecureStore store = new SecureStore(this);
         List<ServerProfiles.Profile> profiles = ServerProfiles.list(store);
         if (profiles.isEmpty()) {
-            showServerEditor(null);
+            showAddServerChoice();
             return;
         }
         ServerProfiles.Profile active = ServerProfiles.active(store);
@@ -1702,7 +1731,7 @@ public class MainActivity extends Activity {
                     LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT);
             addParams.topMargin = dp(22);
-            add.setOnClickListener(v -> showServerEditor(null));
+            add.setOnClickListener(v -> showAddServerChoice());
             page.addView(add, addParams);
         }
         showScrollablePage(page, navHome);
@@ -1978,7 +2007,9 @@ public class MainActivity extends Activity {
                     org.json.JSONArray users = ServerAccessManager.exportUsers(store);
                     ServerAccessManager.Credentials destination =
                             new ServerAccessManager.Credentials(h, portValue, u, pw);
-                    ServerAccessManager.importUsers(destination, users);
+                    ServerAccessManager.importUsers(destination, users,
+                            finalName, profile.socksPort, profile.windowKiB,
+                            profile.packetKiB, profile.mtu);
                     ServerProfiles.Profile moved = new ServerProfiles.Profile(
                             profile.id, finalName, h, portText, u, profile.socksPort,
                             profile.windowKiB, profile.packetKiB, profile.mtu);
@@ -2365,7 +2396,7 @@ public class MainActivity extends Activity {
 
     private void startTunnel() {
         if (ServerProfiles.active(new SecureStore(this)) == null) {
-            showServerEditor(null);
+            showAddServerChoice();
             return;
         }
         if (Branding.isSecretInput(

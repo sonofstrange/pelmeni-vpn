@@ -9,26 +9,6 @@ import java.nio.charset.StandardCharsets;
 final class ServerAccessCode {
     private static final String PREFIX = "PEL1-";
 
-    static String create(SecureStore store, ServerAccessManager.ManagedUser managed)
-            throws Exception {
-        ServerProfiles.Profile profile = ServerProfiles.active(store);
-        if (profile == null) throw new Exception("Нет активного сервера.");
-        JSONObject json = new JSONObject()
-                .put("format", 1)
-                .put("name", profile.name + " · " + managed.label)
-                .put("host", profile.host)
-                .put("ssh_port", profile.sshPort)
-                .put("username", managed.login)
-                .put("password", managed.password)
-                .put("socks_port", profile.socksPort)
-                .put("window_kib", profile.windowKiB)
-                .put("packet_kib", profile.packetKiB)
-                .put("mtu", profile.mtu);
-        return PREFIX + Base64.encodeToString(
-                json.toString().getBytes(StandardCharsets.UTF_8),
-                Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING);
-    }
-
     static ServerProfiles.Profile importCode(SecureStore store, String raw)
             throws Exception {
         String value = raw.trim();

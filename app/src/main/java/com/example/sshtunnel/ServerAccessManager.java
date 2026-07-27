@@ -3,6 +3,7 @@ package com.example.sshtunnel;
 import android.util.Base64;
 
 import com.jcraft.jsch.ChannelExec;
+import com.jcraft.jsch.ChannelSftp;
 import com.jcraft.jsch.JSch;
 import com.jcraft.jsch.Session;
 
@@ -81,6 +82,16 @@ final class ServerAccessManager {
         }
     }
 
+    static final class TlsBundle {
+        final byte[] pkcs12;
+        final String password;
+
+        TlsBundle(byte[] pkcs12, String password) {
+            this.pkcs12 = pkcs12;
+            this.password = password;
+        }
+    }
+
     static List<ManagedUser> list(SecureStore store) throws Exception {
         return list(store, ServerProfiles.active(store));
     }
@@ -88,20 +99,22 @@ final class ServerAccessManager {
     static List<ManagedUser> list(
             SecureStore store, ServerProfiles.Profile profile) throws Exception {
         return decodeUsers(run(profileCredentials(store, profile), "list",
-                new JSONObject().put("code_profile", codeProfile(profile))));
+                new JSONObject().put("code_profile",
+                        codeProfile(store, profile, false))));
     }
 
     static ManagedUser create(SecureStore store, String label, String requestedLogin,
                               int days, long dailyMb, long monthlyMb, long speedMbps)
             throws Exception {
         return create(store, ServerProfiles.active(store), label, requestedLogin,
-                days, dailyMb, monthlyMb, speedMbps);
+                days, dailyMb, monthlyMb, speedMbps, false);
     }
 
     static ManagedUser create(
             SecureStore store, ServerProfiles.Profile profile,
             String label, String requestedLogin, int days,
-            long dailyMb, long monthlyMb, long speedMbps) throws Exception {
+            long dailyMb, long monthlyMb, long speedMbps,
+            boolean useTls) throws Exception {
         String login = normalizeLogin(requestedLogin);
         JSONObject request = new JSONObject()
                 .put("label", label.trim())
@@ -110,13 +123,40 @@ final class ServerAccessManager {
                 .put("daily_mb", dailyMb)
                 .put("monthly_mb", monthlyMb)
                 .put("speed_mbps", speedMbps)
-                .put("code_profile", codeProfile(profile));
+                .put("use_tls", useTls)
+                .put("code_profile", codeProfile(store, profile, useTls));
         List<ManagedUser> users = decodeUsers(
                 run(profileCredentials(store, profile), "create", request));
         for (ManagedUser user : users) {
             if (user.login.equals(login)) return user;
         }
         throw new Exception("Сервер создал пользователя, но не вернул его настройки.");
+    }
+
+    static TlsBundle fetchTlsBundle(
+            String host, int port, String user, String password) throws Exception {
+        Session session = new JSch().getSession(user, host, port);
+        session.setPassword(password);
+        session.setSocketFactory(new LowLatencySocketFactory(null));
+        session.setConfig("StrictHostKeyChecking", "no");
+        session.setConfig("PreferredAuthentications", "password,keyboard-interactive");
+        session.connect(20_000);
+        ChannelSftp channel = (ChannelSftp) session.openChannel("sftp");
+        try {
+            channel.connect(10_000);
+            ByteArrayOutputStream bundle = new ByteArrayOutputStream();
+            ByteArrayOutputStream bundlePassword = new ByteArrayOutputStream();
+            channel.get(".pelmeni-tls.p12", bundle);
+            channel.get(".pelmeni-tls-password", bundlePassword);
+            String value = bundlePassword.toString(StandardCharsets.UTF_8.name()).trim();
+            if (bundle.size() == 0 || value.isEmpty()) {
+                throw new Exception("Сервер не выдал TLS-сертификат.");
+            }
+            return new TlsBundle(bundle.toByteArray(), value);
+        } finally {
+            if (channel.isConnected()) channel.disconnect();
+            session.disconnect();
+        }
     }
 
     static void extend(SecureStore store, String login, int days) throws Exception {
@@ -286,9 +326,11 @@ final class ServerAccessManager {
         return login;
     }
 
-    private static JSONObject codeProfile(ServerProfiles.Profile profile) throws Exception {
+    private static JSONObject codeProfile(
+            SecureStore store, ServerProfiles.Profile profile,
+            boolean useTls) throws Exception {
         if (profile == null) throw new Exception("Нет активного сервера.");
-        return new JSONObject()
+        JSONObject result = new JSONObject()
                 .put("name", profile.name)
                 .put("host", profile.host)
                 .put("ssh_port", Integer.parseInt(profile.sshPort))
@@ -296,6 +338,17 @@ final class ServerAccessManager {
                 .put("window_kib", profile.windowKiB)
                 .put("packet_kib", profile.packetKiB)
                 .put("mtu", profile.mtu);
+        if (useTls) {
+            if (!TlsTransport.isConfiguredForProfile(store, profile)) {
+                throw new Exception("На выбранном сервере TLS не настроен.");
+            }
+            result.put("tls_enabled", true)
+                    .put("tls_port", TlsTransport.portForProfile(store, profile))
+                    .put("tls_ports", TlsTransport.portsForProfile(store, profile));
+        } else {
+            result.put("tls_enabled", false);
+        }
+        return result;
     }
 
     private static String managementScript(String action, String payload) {
@@ -337,7 +390,7 @@ final class ServerAccessManager {
 
     private static String workerPython() {
         return String.join("\n",
-                "import base64,datetime,json,os,pwd,secrets,string,subprocess,sys,time",
+                "import base64,datetime,json,os,pwd,secrets,shutil,string,subprocess,sys,time",
                 "path='/etc/pelmeni-vpn/users.json'; usage_path='/etc/pelmeni-vpn/usage.json'",
                 "action=sys.argv[1]",
                 "req=json.loads(base64.b64decode(sys.argv[2]).decode()) if len(sys.argv)>2 and sys.argv[2] else {}",
@@ -365,9 +418,17 @@ final class ServerAccessManager {
                 " finally: os.close(fd)",
                 " os.replace(tmp,target)",
                 "def make_code(user):",
-                " data={'format':1,'name':profile.get('name',profile.get('host',''))+' · '+user.get('label',user['login']),'host':profile['host'],'ssh_port':str(profile.get('ssh_port',22)),'username':user['login'],'password':user['password'],'socks_port':str(profile.get('socks_port','1080')),'window_kib':profile.get('window_kib',1024),'packet_kib':profile.get('packet_kib',32),'mtu':profile.get('mtu',8500),'expires':user.get('expires',''),'daily_mb':int(user.get('daily_mb',0)),'monthly_mb':int(user.get('monthly_mb',0)),'speed_mbps':int(user.get('speed_mbps',0)),'issued_at':int(user.get('issued_at',int(time.time())))}",
+                " data={'format':1,'name':profile.get('name',profile.get('host',''))+' · '+user.get('label',user['login']),'host':profile['host'],'ssh_port':str(profile.get('ssh_port',22)),'username':user['login'],'password':user['password'],'socks_port':str(profile.get('socks_port','1080')),'window_kib':profile.get('window_kib',1024),'packet_kib':profile.get('packet_kib',32),'mtu':profile.get('mtu',8500),'expires':user.get('expires',''),'daily_mb':int(user.get('daily_mb',0)),'monthly_mb':int(user.get('monthly_mb',0)),'speed_mbps':int(user.get('speed_mbps',0)),'issued_at':int(user.get('issued_at',int(time.time()))),'tls_enabled':bool(user.get('use_tls',False))}",
+                " if data['tls_enabled']: data.update(tls_port=int(profile.get('tls_port',443)),tls_ports=str(profile.get('tls_ports',profile.get('tls_port',443))))",
                 " raw=json.dumps(data,ensure_ascii=False,separators=(',',':')).encode()",
                 " return 'PEL1-'+base64.urlsafe_b64encode(raw).decode().rstrip('=')",
+                "def provision_tls(user):",
+                " if not user.get('use_tls',False): return",
+                " source='/etc/stunnel/pelmeni/client.p12'; secret='/etc/stunnel/pelmeni/p12.password'",
+                " if not os.path.isfile(source) or not os.path.isfile(secret): raise Exception('TLS на сервере не настроен.')",
+                " account=pwd.getpwnam(user['login']); home=account.pw_dir",
+                " for src,name in ((source,'.pelmeni-tls.p12'),(secret,'.pelmeni-tls-password')):",
+                "  target=os.path.join(home,name); shutil.copyfile(src,target); os.chown(target,account.pw_uid,account.pw_gid); os.chmod(target,0o600)",
                 "now=int(time.time()); legacy_changed=False",
                 "for existing in users:",
                 " if int(existing.get('issued_at',0))<=0: existing['issued_at']=now; legacy_changed=True",
@@ -385,6 +446,7 @@ final class ServerAccessManager {
                 "  shell('useradd','-m','-g','pelmeni-vpn','-s','/bin/bash',login)",
                 "  shell('chpasswd',input=login+':'+req['password']+'\\n')",
                 "  shell('chage','-E',req.get('expires') or '-1',login)",
+                "  provision_tls(req)",
                 "  users.append(req); save()",
                 " elif action=='extend':",
                 "  found=False",
@@ -437,6 +499,7 @@ final class ServerAccessManager {
                 "   shell('usermod','-g','pelmeni-vpn',name)",
                 "   shell('chpasswd',input=name+':'+incoming['password']+'\\n')",
                 "   shell('chage','-E',incoming.get('expires') or '-1',name)",
+                "   provision_tls(incoming)",
                 "   incoming['access_code']=make_code(incoming)",
                 "   users=[x for x in users if x.get('login')!=name]; users.append(incoming)",
                 "  save()",

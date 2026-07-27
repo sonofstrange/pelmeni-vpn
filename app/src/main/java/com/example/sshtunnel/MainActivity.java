@@ -587,18 +587,26 @@ public class MainActivity extends Activity {
     private void importAccessCode(String code) {
         boolean reconnect = running;
         if (reconnect) stopTunnel();
-        try {
-            ServerProfiles.Profile profile = ServerAccessCode.importCode(
-                    new SecureStore(this), code);
-            loadSettings();
-            Toast.makeText(this, "Добавлен сервер «" + profile.name + "»",
-                    Toast.LENGTH_LONG).show();
-            showHomePage();
-            if (reconnect) toggle.postDelayed(this::startTunnel, 900);
-        } catch (Exception error) {
-            Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show();
-            if (reconnect) toggle.postDelayed(this::startTunnel, 900);
-        }
+        Toast.makeText(this, "Добавляю сервер и получаю настройки…",
+                Toast.LENGTH_SHORT).show();
+        speedWorker.execute(() -> {
+            try {
+                ServerProfiles.Profile profile = ServerAccessCode.importCode(
+                        new SecureStore(this), code);
+                mainHandler.post(() -> {
+                    loadSettings();
+                    Toast.makeText(this, "Добавлен сервер «" + profile.name + "»",
+                            Toast.LENGTH_LONG).show();
+                    showHomePage();
+                    if (reconnect) toggle.postDelayed(this::startTunnel, 900);
+                });
+            } catch (Exception error) {
+                mainHandler.post(() -> {
+                    Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show();
+                    if (reconnect) toggle.postDelayed(this::startTunnel, 900);
+                });
+            }
+        });
     }
 
     private void showCreateManagedUser() {
@@ -622,6 +630,18 @@ public class MainActivity extends Activity {
         EditText speed = addServerField(page, "Скорость · Мбит/с", "0",
                 InputType.TYPE_CLASS_NUMBER);
         addQuickChoices(page, speed, "0", "5", "10", "25");
+        SecureStore store = new SecureStore(this);
+        ServerProfiles.Profile selectedServer = peopleServer(store);
+        boolean tlsAvailable = TlsTransport.isConfiguredForProfile(
+                store, selectedServer);
+        addSectionTitle(page, "Защита подключения");
+        CheckBox useTls = addToggleCard(page, "Использовать TLS",
+                tlsAvailable
+                        ? "Сертификат установится вместе с кодом доступа. Пользователь сможет отключить TLS позже."
+                        : "На выбранном сервере TLS не настроен. Сначала включи его в настройках сервера.",
+                tlsAvailable, checked -> {
+                });
+        useTls.setEnabled(tlsAvailable);
         Button create = new Button(this);
         create.setText("СОЗДАТЬ И ПОЛУЧИТЬ КОД");
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
@@ -649,7 +669,8 @@ public class MainActivity extends Activity {
                     ServerAccessManager.ManagedUser managed = ServerAccessManager.create(
                             new SecureStore(this), peopleServer(new SecureStore(this)),
                             finalDisplayName, finalLogin, (int) daysValue,
-                            dailyValue, monthlyValue, speedValue);
+                            dailyValue, monthlyValue, speedValue,
+                            useTls.isChecked());
                     mainHandler.post(() -> {
                         showAccessCode(managed);
                         showPeoplePage(null, null);
@@ -1058,7 +1079,7 @@ public class MainActivity extends Activity {
         card.addView(view);
     }
 
-    private void addToggleCard(
+    private CheckBox addToggleCard(
             LinearLayout page, String title, String subtitle,
             boolean checked, ToggleChange onChange) {
         LinearLayout card = createCard();
@@ -1072,6 +1093,7 @@ public class MainActivity extends Activity {
         addCardSubtitle(card, subtitle);
         toggle.setOnCheckedChangeListener((button, value) -> onChange.onChange(value));
         page.addView(card, pageCardParams());
+        return toggle;
     }
 
     private RadioButton createRadio(String title, String subtitle) {

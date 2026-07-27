@@ -5,6 +5,8 @@ import android.util.Base64;
 import org.json.JSONObject;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 
 final class ServerAccessCode {
     private static final String PREFIX = "PEL1-";
@@ -28,6 +30,12 @@ final class ServerAccessCode {
         String socksPort = json.optString("socks_port", "1080").trim();
         if (host.isEmpty() || username.isEmpty() || password.isEmpty()) {
             throw new Exception("Код доступа повреждён.");
+        }
+        ServerAccessManager.TlsBundle tlsBundle = null;
+        boolean tlsEnabled = json.optBoolean("tls_enabled", false);
+        if (tlsEnabled) {
+            tlsBundle = ServerAccessManager.fetchTlsBundle(
+                    host, Integer.parseInt(sshPort), username, password);
         }
         ServerProfiles.Profile existing = null;
         for (ServerProfiles.Profile candidate : ServerProfiles.list(store)) {
@@ -53,6 +61,26 @@ final class ServerAccessCode {
                     json.optInt("mtu", existing.mtu));
         }
         ServerProfiles.saveAndActivate(store, profile, password);
+        if (json.has("tls_enabled")) {
+            if (tlsEnabled) {
+                int tlsPort = json.optInt("tls_port", TlsTransport.DEFAULT_PORT);
+                TlsTransport.save(store, host, tlsPort,
+                        tlsBundle.pkcs12, tlsBundle.password);
+                List<Integer> ports = new ArrayList<>();
+                for (String rawPort : json.optString(
+                        "tls_ports", Integer.toString(tlsPort)).split(",")) {
+                    try {
+                        ports.add(Integer.parseInt(rawPort.trim()));
+                    } catch (NumberFormatException ignored) {
+                    }
+                }
+                TlsTransport.setAvailablePorts(store, ports);
+                TlsTransport.snapshotForProfile(store, profile.id);
+            } else {
+                TlsTransport.setEnabledByUser(store, false);
+                TlsTransport.snapshotForProfile(store, profile.id);
+            }
+        }
         UserAccessPolicy.saveFromCode(store, profile.id, json);
         return profile;
     }

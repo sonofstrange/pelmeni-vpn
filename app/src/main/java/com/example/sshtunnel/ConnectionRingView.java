@@ -22,12 +22,12 @@ public final class ConnectionRingView extends View {
         setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
         setLayerType(LAYER_TYPE_SOFTWARE, null);
         track.setStyle(Paint.Style.STROKE);
-        track.setStrokeWidth(dp(2));
-        track.setColor(0x665D606A);
+        track.setStrokeWidth(dp(2.5f));
+        track.setColor(0x995D606A);
         arc.setStyle(Paint.Style.STROKE);
         arc.setStrokeCap(Paint.Cap.ROUND);
-        arc.setStrokeWidth(dp(4.5f));
-        arc.setColor(0xFFFFAA5B);
+        arc.setStrokeWidth(dp(7));
+        arc.setColor(0xFFFF9B42);
     }
 
     public void setConnecting(boolean connecting) {
@@ -60,9 +60,9 @@ public final class ConnectionRingView extends View {
                 centerX + radius, centerY + radius);
         canvas.drawCircle(centerX, centerY, radius, track);
         arc.setAlpha(255);
-        arc.setShadowLayer(dp(5), 0, 0, 0x99FF9B4A);
+        arc.setShadowLayer(dp(9), 0, 0, 0xFFFF8A32);
         float start = phase * 360f - 90f;
-        canvas.drawArc(bounds, start, 105f, false, arc);
+        canvas.drawArc(bounds, start, 125f, false, arc);
     }
 
     @Override protected void onDetachedFromWindow() {

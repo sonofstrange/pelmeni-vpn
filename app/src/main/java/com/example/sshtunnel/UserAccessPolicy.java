@@ -17,14 +17,17 @@ final class UserAccessPolicy {
         final long dailyMb;
         final long monthlyMb;
         final long speedMbps;
+        final long serverOffsetMinutes;
 
         Policy(boolean configured, String expires,
-               long dailyMb, long monthlyMb, long speedMbps) {
+               long dailyMb, long monthlyMb, long speedMbps,
+               long serverOffsetMinutes) {
             this.configured = configured;
             this.expires = expires;
             this.dailyMb = dailyMb;
             this.monthlyMb = monthlyMb;
             this.speedMbps = speedMbps;
+            this.serverOffsetMinutes = serverOffsetMinutes;
         }
 
         boolean hasLimits() {
@@ -66,6 +69,19 @@ final class UserAccessPolicy {
         store.putLong(prefix + "daily_mb", dailyMb);
         store.putLong(prefix + "monthly_mb", monthlyMb);
         store.putLong(prefix + "speed_mbps", Math.max(0, code.optLong("speed_mbps", 0)));
+        long localOffset = java.time.OffsetDateTime.now()
+                .getOffset().getTotalSeconds() / 60L;
+        store.putLong(prefix + "server_offset_minutes",
+                code.optLong("server_offset_minutes",
+                        store.getLong(prefix + "server_offset_minutes", localOffset)));
+        long usageResetAt = Math.max(0, code.optLong("usage_reset_at", 0));
+        if (usageResetAt > store.getLong(prefix + "usage_reset_at", 0)) {
+            store.putLong(prefix + "usage_reset_at", usageResetAt);
+            store.putLong(prefix + "day_bytes", 0);
+            store.putLong(prefix + "month_bytes", 0);
+            store.putLong(prefix + "day_notice", 0);
+            store.putLong(prefix + "month_notice", 0);
+        }
         if (dailyChanged) store.putLong(prefix + "day_notice", 0);
         if (monthlyChanged) store.putLong(prefix + "month_notice", 0);
         normalizeUsage(store, profileId);
@@ -78,7 +94,8 @@ final class UserAccessPolicy {
                 store.getPlain(prefix + "expires", ""),
                 store.getLong(prefix + "daily_mb", 0),
                 store.getLong(prefix + "monthly_mb", 0),
-                store.getLong(prefix + "speed_mbps", 0));
+                store.getLong(prefix + "speed_mbps", 0),
+                store.getLong(prefix + "server_offset_minutes", 0));
     }
 
     static void syncFromServer(

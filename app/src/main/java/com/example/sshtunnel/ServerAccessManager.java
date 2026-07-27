@@ -48,12 +48,14 @@ final class ServerAccessManager {
         final boolean policyHealthy;
         final String policyError;
         final long statusUpdatedAt;
+        final long serverOffsetMinutes;
 
         ManagedUser(String label, String login, String password, String expires,
                     long dailyMb, long monthlyMb, long speedMbps, String accessCode,
                     long dayBytes, long monthBytes, boolean blocked,
                     boolean expired, boolean policyHealthy,
-                    String policyError, long statusUpdatedAt) {
+                    String policyError, long statusUpdatedAt,
+                    long serverOffsetMinutes) {
             this.label = label;
             this.login = login;
             this.password = password;
@@ -69,6 +71,7 @@ final class ServerAccessManager {
             this.policyHealthy = policyHealthy;
             this.policyError = policyError;
             this.statusUpdatedAt = statusUpdatedAt;
+            this.serverOffsetMinutes = serverOffsetMinutes;
         }
 
         boolean forever() {
@@ -150,6 +153,13 @@ final class ServerAccessManager {
             if (user.login.equals(login)) return user;
         }
         throw new Exception("Сервер не вернул обновлённого пользователя.");
+    }
+
+    static void resetUsage(
+            SecureStore store, ServerProfiles.Profile profile, String login)
+            throws Exception {
+        run(profileCredentials(store, profile), "reset",
+                new JSONObject().put("login", login));
     }
 
     static JSONArray exportUsers(SecureStore store) throws Exception {
@@ -256,7 +266,8 @@ final class ServerAccessManager {
                     item.optBoolean("expired", false),
                     item.optBoolean("policy_healthy", false),
                     item.optString("policy_error", ""),
-                    item.optLong("status_updated_at", 0)));
+                    item.optLong("status_updated_at", 0),
+                    item.optLong("server_offset_minutes", 0)));
         }
         return users;
     }
@@ -324,21 +335,25 @@ final class ServerAccessManager {
     private static String workerPython() {
         return String.join("\n",
                 "import base64,datetime,json,os,pwd,secrets,string,subprocess,sys,time",
-                "path='/etc/pelmeni-vpn/users.json'",
+                "path='/etc/pelmeni-vpn/users.json'; usage_path='/etc/pelmeni-vpn/usage.json'",
                 "action=sys.argv[1]",
                 "req=json.loads(base64.b64decode(sys.argv[2]).decode()) if len(sys.argv)>2 and sys.argv[2] else {}",
                 "try:",
                 " users=json.load(open(path,encoding='utf-8'))",
                 "except Exception: users=[]",
-                "def save():",
-                " tmp=path+'.tmp'; open(tmp,'w',encoding='utf-8').write(json.dumps(users,ensure_ascii=False)); os.chmod(tmp,0o600); os.replace(tmp,path)",
+                "def save_json(target,value):",
+                " tmp=target+'.tmp'; open(tmp,'w',encoding='utf-8').write(json.dumps(value,ensure_ascii=False)); os.chmod(tmp,0o600); os.replace(tmp,target)",
+                "def save(): save_json(path,users)",
                 "def shell(*args,input=None): subprocess.run(args,input=input,text=True,check=True,stdout=subprocess.DEVNULL)",
                 "login=req.get('login','')",
                 "profile=req.pop('code_profile',{})",
+                "def server_offset_minutes():",
+                " offset=datetime.datetime.now().astimezone().utcoffset() or datetime.timedelta()",
+                " return int(offset.total_seconds()//60)",
                 "def write_policy(user):",
                 " try: account=pwd.getpwnam(user['login'])",
                 " except KeyError: return",
-                " data={'format':1,'expires':user.get('expires',''),'daily_mb':int(user.get('daily_mb',0)),'monthly_mb':int(user.get('monthly_mb',0)),'speed_mbps':int(user.get('speed_mbps',0))}",
+                " data={'format':1,'expires':user.get('expires',''),'daily_mb':int(user.get('daily_mb',0)),'monthly_mb':int(user.get('monthly_mb',0)),'speed_mbps':int(user.get('speed_mbps',0)),'server_offset_minutes':server_offset_minutes(),'usage_reset_at':int(user.get('usage_reset_at',0))}",
                 " target=os.path.join(account.pw_dir,'.pelmeni-policy.json')",
                 " tmp=target+'.tmp-'+secrets.token_hex(8)",
                 " fd=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)",
@@ -388,6 +403,18 @@ final class ServerAccessManager {
                 "    found=True",
                 "  if not found: raise Exception('Пользователь не найден.')",
                 "  save()",
+                " elif action=='reset':",
+                "  found=False",
+                "  for x in users:",
+                "   if x['login']==login: x['usage_reset_at']=max(int(time.time()),int(x.get('usage_reset_at',0))+1); found=True",
+                "  if not found: raise Exception('Пользователь не найден.')",
+                "  save()",
+                "  subprocess.run(['systemctl','stop','pelmeni-user-policy.service'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)",
+                "  try: usage=json.load(open(usage_path,encoding='utf-8'))",
+                "  except Exception: usage={}",
+                "  today=str(datetime.date.today()); month=today[:7]",
+                "  usage[login]={'day':today,'month':month,'day_bytes':0,'month_bytes':0,'last':0,'blocked':False}",
+                "  save_json(usage_path,usage)",
                 " elif action=='revoke':",
                 "  users[:]=[x for x in users if x['login']!=login]",
                 "  subprocess.run(['userdel','-r',login],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)",
@@ -432,7 +459,7 @@ final class ServerAccessManager {
                 "  stats=usage.get(x['login'],{})",
                 "  x['day_bytes']=int(stats.get('day_bytes',0)); x['month_bytes']=int(stats.get('month_bytes',0)); x['blocked']=bool(stats.get('blocked',False))",
                 "  x['expired']=bool(x.get('expires') and x['expires']<str(datetime.date.today()))",
-                "  x['policy_healthy']=healthy; x['policy_error']=control.get('error',''); x['status_updated_at']=int(control.get('updated_at',0))",
+                "  x['policy_healthy']=healthy; x['policy_error']=control.get('error',''); x['status_updated_at']=int(control.get('updated_at',0)); x['server_offset_minutes']=server_offset_minutes()",
                 " data=json.dumps(users,ensure_ascii=False).encode()",
                 " print('PELMENI_USERS='+base64.b64encode(data).decode())",
                 "except Exception as e:",

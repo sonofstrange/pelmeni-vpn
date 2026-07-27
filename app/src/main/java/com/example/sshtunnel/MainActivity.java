@@ -321,15 +321,24 @@ public class MainActivity extends Activity {
             String speed = managed.speedMbps <= 0 ? "без ограничения"
                     : managed.speedMbps + " Мбит/с";
             String state = managedUserState(managed);
+            String resets = (managed.dailyMb > 0
+                    ? "день " + limitResetCountdown(
+                    managed.serverOffsetMinutes, false) : "")
+                    + (managed.dailyMb > 0 && managed.monthlyMb > 0 ? " · " : "")
+                    + (managed.monthlyMb > 0
+                    ? "месяц " + limitResetCountdown(
+                    managed.serverOffsetMinutes, true) : "");
             addCardSubtitle(card, state + " · " + expiry
                     + "\nСегодня: " + formatBytes(managed.dayBytes)
                     + (managed.dailyMb > 0 ? " / " + managed.dailyMb + " МБ" : "")
                     + " · месяц: " + formatBytes(managed.monthBytes)
                     + (managed.monthlyMb > 0 ? " / " + managed.monthlyMb + " МБ" : "")
-                    + "\nЛимиты: " + daily + " · " + monthly + " · " + speed);
+                    + "\nЛимиты: " + daily + " · " + monthly + " · " + speed
+                    + (resets.isEmpty() ? "" : "\nСброс: " + resets));
             LinearLayout actions = new LinearLayout(this);
             actions.setOrientation(LinearLayout.VERTICAL);
-            actions.setPadding(0, dp(10), 0, 0);
+            actions.setPadding(0, dp(8), 0, 0);
+            actions.setVisibility(View.GONE);
             LinearLayout primary = createUserActionRow();
             addUserAction(primary, "СТАТУС И ТРАФИК", false,
                     () -> showManagedUserStatus(managed), false);
@@ -347,7 +356,27 @@ public class MainActivity extends Activity {
             limits.setPadding(0, dp(8), 0, 0);
             addUserAction(limits, "ИЗМЕНИТЬ ЛИМИТЫ", false,
                     () -> showEditManagedUserLimits(managed), false);
+            addUserAction(limits, "ОБНУЛИТЬ ТРАФИК", true,
+                    () -> confirmResetManagedUserUsage(managed), true);
             actions.addView(limits);
+            TextView actionsToggle = new TextView(this);
+            actionsToggle.setText("УПРАВЛЕНИЕ  ▼");
+            actionsToggle.setTextColor(0xFFE8EAF0);
+            actionsToggle.setTextSize(13);
+            actionsToggle.setTypeface(null, android.graphics.Typeface.BOLD);
+            actionsToggle.setGravity(android.view.Gravity.CENTER);
+            actionsToggle.setBackgroundResource(R.drawable.settings_action_background);
+            actionsToggle.setClickable(true);
+            actionsToggle.setFocusable(true);
+            actionsToggle.setOnClickListener(v -> {
+                boolean open = actions.getVisibility() != View.VISIBLE;
+                actions.setVisibility(open ? View.VISIBLE : View.GONE);
+                actionsToggle.setText(open ? "УПРАВЛЕНИЕ  ▲" : "УПРАВЛЕНИЕ  ▼");
+            });
+            LinearLayout.LayoutParams toggleParams = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, dp(48));
+            toggleParams.topMargin = dp(10);
+            card.addView(actionsToggle, toggleParams);
             card.addView(actions);
             page.addView(card, pageCardParams());
         }
@@ -404,6 +433,10 @@ public class MainActivity extends Activity {
                 + (managed.dailyMb > 0 ? " из " + managed.dailyMb + " МБ" : "")
                 + "\nВ этом месяце: " + formatBytes(managed.monthBytes)
                 + (managed.monthlyMb > 0 ? " из " + managed.monthlyMb + " МБ" : "")
+                + (managed.dailyMb > 0 ? "\nДневной сброс "
+                + limitResetCountdown(managed.serverOffsetMinutes, false) : "")
+                + (managed.monthlyMb > 0 ? "\nМесячный сброс "
+                + limitResetCountdown(managed.serverOffsetMinutes, true) : "")
                 + "\nОграничение скорости: "
                 + (managed.speedMbps > 0 ? managed.speedMbps + " Мбит/с" : "нет")
                 + "\n\nКонтроллер: "
@@ -788,6 +821,33 @@ public class MainActivity extends Activity {
                         Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show());
             }
         });
+    }
+
+    private void confirmResetManagedUserUsage(
+            ServerAccessManager.ManagedUser managed) {
+        new AlertDialog.Builder(this)
+                .setTitle("Обнулить трафик у " + managed.label + "?")
+                .setMessage("Дневной и месячный счётчики станут равны нулю. "
+                        + "Размер самих лимитов и код доступа не изменятся.")
+                .setPositiveButton("Обнулить", (dialog, which) ->
+                        speedWorker.execute(() -> {
+                            try {
+                                SecureStore store = new SecureStore(this);
+                                ServerAccessManager.resetUsage(
+                                        store, peopleServer(store), managed.login);
+                                mainHandler.post(() -> {
+                                    Toast.makeText(this, "Трафик обнулён",
+                                            Toast.LENGTH_SHORT).show();
+                                    showPeoplePage(null, null);
+                                });
+                            } catch (Exception error) {
+                                mainHandler.post(() -> Toast.makeText(
+                                        this, error.getMessage(),
+                                        Toast.LENGTH_LONG).show());
+                            }
+                        }))
+                .setNegativeButton("Отмена", null)
+                .show();
     }
 
     private void confirmRevokeManagedUser(ServerAccessManager.ManagedUser managed) {
@@ -2000,6 +2060,10 @@ public class MainActivity extends Activity {
                 != android.content.pm.PackageManager.PERMISSION_GRANTED;
         userLimitSummary.setText("Ваш доступ · " + expiry + "\n"
                 + daily + " · " + monthly + "\nСкорость: " + speed
+                + (policy.dailyMb > 0 ? "\nДневной сброс "
+                + limitResetCountdown(policy.serverOffsetMinutes, false) : "")
+                + (policy.monthlyMb > 0 ? " · месячный "
+                + limitResetCountdown(policy.serverOffsetMinutes, true) : "")
                 + (warning.isEmpty() ? "" : "\n⚠ " + warning)
                 + (notificationsBlocked
                 ? "\n⚠ Уведомления запрещены Android — нажми сюда, чтобы включить." : ""));
@@ -2787,6 +2851,25 @@ public class MainActivity extends Activity {
 
     private String formatRate(long bytesPerSecond) {
         return formatBytes(bytesPerSecond) + "/с";
+    }
+
+    private String limitResetCountdown(long serverOffsetMinutes, boolean monthly) {
+        long safeOffset = Math.max(-18 * 60, Math.min(18 * 60, serverOffsetMinutes));
+        java.time.ZoneOffset offset = java.time.ZoneOffset.ofTotalSeconds(
+                (int) safeOffset * 60);
+        java.time.ZonedDateTime now = java.time.ZonedDateTime.now(offset);
+        java.time.LocalDate resetDate = monthly
+                ? now.toLocalDate().withDayOfMonth(1).plusMonths(1)
+                : now.toLocalDate().plusDays(1);
+        java.time.ZonedDateTime reset = resetDate.atStartOfDay(offset);
+        long minutes = Math.max(0,
+                (java.time.Duration.between(now, reset).getSeconds() + 59) / 60);
+        long days = minutes / (24 * 60);
+        long hours = (minutes / 60) % 24;
+        long remainingMinutes = minutes % 60;
+        if (days > 0) return "через " + days + " д " + hours + " ч";
+        if (hours > 0) return "через " + hours + " ч " + remainingMinutes + " мин";
+        return "через " + remainingMinutes + " мин";
     }
 
     private String formatBytes(long bytes) {

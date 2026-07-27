@@ -1,7 +1,12 @@
 package com.example.sshtunnel;
 
+import com.jcraft.jsch.ChannelSftp;
+import com.jcraft.jsch.Session;
+
 import org.json.JSONObject;
 
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.YearMonth;
 
@@ -74,6 +79,23 @@ final class UserAccessPolicy {
                 store.getLong(prefix + "daily_mb", 0),
                 store.getLong(prefix + "monthly_mb", 0),
                 store.getLong(prefix + "speed_mbps", 0));
+    }
+
+    static void syncFromServer(
+            SecureStore store, String profileId, Session session) throws Exception {
+        if (!load(store, profileId).configured || session == null
+                || !session.isConnected()) return;
+        ChannelSftp channel = (ChannelSftp) session.openChannel("sftp");
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        try {
+            channel.connect(5_000);
+            channel.get(".pelmeni-policy.json", output);
+            JSONObject policy = new JSONObject(
+                    output.toString(StandardCharsets.UTF_8.name()));
+            saveFromCode(store, profileId, policy);
+        } finally {
+            channel.disconnect();
+        }
     }
 
     static Usage usage(SecureStore store, String profileId) {

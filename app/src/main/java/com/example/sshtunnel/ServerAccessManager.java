@@ -143,8 +143,7 @@ final class ServerAccessManager {
                 .put("login", login)
                 .put("daily_mb", dailyMb)
                 .put("monthly_mb", monthlyMb)
-                .put("speed_mbps", speedMbps)
-                .put("code_profile", codeProfile(profile));
+                .put("speed_mbps", speedMbps);
         List<ManagedUser> users = decodeUsers(
                 run(profileCredentials(store, profile), "limits", request));
         for (ManagedUser user : users) {
@@ -336,6 +335,17 @@ final class ServerAccessManager {
                 "def shell(*args,input=None): subprocess.run(args,input=input,text=True,check=True,stdout=subprocess.DEVNULL)",
                 "login=req.get('login','')",
                 "profile=req.pop('code_profile',{})",
+                "def write_policy(user):",
+                " try: account=pwd.getpwnam(user['login'])",
+                " except KeyError: return",
+                " data={'format':1,'expires':user.get('expires',''),'daily_mb':int(user.get('daily_mb',0)),'monthly_mb':int(user.get('monthly_mb',0)),'speed_mbps':int(user.get('speed_mbps',0))}",
+                " target=os.path.join(account.pw_dir,'.pelmeni-policy.json')",
+                " tmp=target+'.tmp-'+secrets.token_hex(8)",
+                " fd=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)",
+                " try:",
+                "  os.write(fd,json.dumps(data,ensure_ascii=False,separators=(',',':')).encode()); os.fchown(fd,account.pw_uid,account.pw_gid)",
+                " finally: os.close(fd)",
+                " os.replace(tmp,target)",
                 "def make_code(user):",
                 " data={'format':1,'name':profile.get('name',profile.get('host',''))+' · '+user.get('label',user['login']),'host':profile['host'],'ssh_port':str(profile.get('ssh_port',22)),'username':user['login'],'password':user['password'],'socks_port':str(profile.get('socks_port','1080')),'window_kib':profile.get('window_kib',1024),'packet_kib':profile.get('packet_kib',32),'mtu':profile.get('mtu',8500),'expires':user.get('expires',''),'daily_mb':int(user.get('daily_mb',0)),'monthly_mb':int(user.get('monthly_mb',0)),'speed_mbps':int(user.get('speed_mbps',0))}",
                 " raw=json.dumps(data,ensure_ascii=False,separators=(',',':')).encode()",
@@ -375,7 +385,7 @@ final class ServerAccessManager {
                 "    x['daily_mb']=max(0,int(req.get('daily_mb',0)))",
                 "    x['monthly_mb']=max(0,int(req.get('monthly_mb',0)))",
                 "    x['speed_mbps']=max(0,int(req.get('speed_mbps',0)))",
-                "    x['access_code']=make_code(x); found=True",
+                "    found=True",
                 "  if not found: raise Exception('Пользователь не найден.')",
                 "  save()",
                 " elif action=='revoke':",
@@ -396,10 +406,10 @@ final class ServerAccessManager {
                 " elif action=='list' and profile:",
                 "  changed=False",
                 "  for x in users:",
-                "   code=make_code(x)",
-                "   if x.get('access_code')!=code: x['access_code']=code; changed=True",
+                "   if not x.get('access_code'): x['access_code']=make_code(x); changed=True",
                 "  if changed: save()",
                 " elif action not in ('list','export'): raise Exception('Неизвестная операция.')",
+                " for x in users: write_policy(x)",
                 " shell('systemctl','daemon-reload')",
                 " shell('systemctl','enable','--now','pelmeni-user-policy.service')",
                 " try: os.remove('/etc/pelmeni-vpn/policy-status.json')",

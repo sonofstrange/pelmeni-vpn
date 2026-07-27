@@ -731,7 +731,7 @@ public class MainActivity extends Activity {
         EditText speed = addServerField(content, "Скорость · Мбит/с",
                 Long.toString(managed.speedMbps), InputType.TYPE_CLASS_NUMBER);
         TextView note = new TextView(this);
-        note.setText("0 означает отсутствие ограничения. После сохранения отправь пользователю обновлённый QR-код.");
+        note.setText("0 означает отсутствие ограничения. Код доступа останется прежним: приложение пользователя получит новые лимиты с сервера автоматически.");
         note.setTextColor(0xFF9297A2);
         note.setTextSize(13);
         content.addView(note);
@@ -755,14 +755,13 @@ public class MainActivity extends Activity {
                     speedWorker.execute(() -> {
                         try {
                             SecureStore store = new SecureStore(this);
-                            ServerAccessManager.ManagedUser updated =
-                                    ServerAccessManager.updateLimits(
-                                            store, peopleServer(store), managed.login,
-                                            dayValue, monthValue, speedValue);
+                            ServerAccessManager.updateLimits(
+                                    store, peopleServer(store), managed.login,
+                                    dayValue, monthValue, speedValue);
                             mainHandler.post(() -> {
-                                Toast.makeText(this, "Лимиты применены",
+                                Toast.makeText(this,
+                                        "Лимиты применены · код менять не нужно",
                                         Toast.LENGTH_SHORT).show();
-                                showAccessCode(updated);
                                 showPeoplePage(null, null);
                             });
                         } catch (Exception error) {

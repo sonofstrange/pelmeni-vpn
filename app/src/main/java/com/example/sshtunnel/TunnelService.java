@@ -45,6 +45,7 @@ public class TunnelService extends Service {
     private long lastPolicyBytes;
     private long lastSampleTime;
     private int statsTicks;
+    private int policySyncTicks;
     private volatile String currentStatus = "Подключение…";
     private volatile long currentSpeed;
     private volatile int currentLatency = -1;
@@ -285,6 +286,7 @@ public class TunnelService extends Service {
         }
 
         send("Подключено · " + TunnelMode.portsLabel(store));
+        syncUserPolicy(newSession);
     }
 
     private Session connectSession(
@@ -327,7 +329,23 @@ public class TunnelService extends Service {
                     || (vpnProxy != null && !vpnProxy.isRunning())) {
                 throw new Exception("local forwarding stopped");
             }
+            if (++policySyncTicks >= 30) {
+                policySyncTicks = 0;
+                syncUserPolicy(current);
+            }
             sleepInterruptibly(2_000L);
+        }
+    }
+
+    private void syncUserPolicy(Session current) {
+        try {
+            SecureStore store = new SecureStore(this);
+            ServerProfiles.Profile profile = ServerProfiles.active(store);
+            if (profile != null) {
+                UserAccessPolicy.syncFromServer(store, profile.id, current);
+            }
+        } catch (Exception ignored) {
+            // Older servers do not expose the per-user policy file yet.
         }
     }
 

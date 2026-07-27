@@ -8,6 +8,7 @@ import android.content.ComponentName;
 import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
 import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -175,7 +176,7 @@ public class MainActivity extends Activity {
         findViewById(R.id.serverProfileCard).setOnClickListener(v -> showServerList());
         splitTunnelButton.setOnClickListener(v -> showSplitTunnelPage());
         navHome.setOnClickListener(v -> showHomePage());
-        navPeople.setOnClickListener(v -> showPeopleWip());
+        navPeople.setOnClickListener(v -> showPeoplePage(null, null));
         navSettings.setOnClickListener(v -> showSettingsHub());
         navAdd.setOnClickListener(v -> showServerEditor(null));
         setSelectedNav(navHome);
@@ -196,32 +197,282 @@ public class MainActivity extends Activity {
         super.onBackPressed();
     }
 
-    private void showPeopleWip() {
-        LinearLayout page = createPageContent("Люди", "Управление доступом к VPN");
-        LinearLayout card = createCard();
-        TextView badge = new TextView(this);
-        badge.setText("WIP · В РАЗРАБОТКЕ");
-        badge.setTextColor(0xFFFFAA5B);
-        badge.setTextSize(13);
-        badge.setTypeface(null, android.graphics.Typeface.BOLD);
-        card.addView(badge);
-        TextView title = new TextView(this);
-        title.setText("Поделись отдельным доступом");
-        title.setTextColor(0xFFF3F4F6);
-        title.setTextSize(20);
-        title.setTypeface(null, android.graphics.Typeface.BOLD);
-        title.setPadding(0, dp(12), 0, 0);
-        card.addView(title);
-        TextView text = new TextView(this);
-        text.setText("Здесь появятся пользователи выбранного сервера: создание учётной "
-                + "записи, готовый конфиг, временное отключение и отзыв доступа.\n\n"
-                + "Сейчас серверные пользователи ещё не создаются.");
-        text.setTextColor(0xFF9297A2);
-        text.setTextSize(14);
-        text.setPadding(0, dp(8), 0, 0);
-        card.addView(text);
-        page.addView(card, pageCardParams());
+    private void showPeoplePage(
+            List<ServerAccessManager.ManagedUser> users, String loadError) {
+        SecureStore store = new SecureStore(this);
+        ServerProfiles.Profile active = ServerProfiles.active(store);
+        LinearLayout page = createPageContent("Люди",
+                active == null ? "Доступ к VPN" : "Пользователи сервера «" + active.name + "»");
+        addPageAction(page, "Ввести код доступа",
+                "Добавить готовый сервер, которым с тобой поделились",
+                this::showImportAccessCode);
+        if (active == null) {
+            showScrollablePage(page, navPeople);
+            return;
+        }
+        addSectionTitle(page, "Управление сервером");
+        addPageAction(page, "Добавить человека",
+                "Отдельный логин, срок, лимиты трафика и скорости",
+                this::showCreateManagedUser);
+        if (users == null && loadError == null) {
+            LinearLayout loading = createCard();
+            addCardTitle(loading, "Загружаю пользователей…");
+            addCardSubtitle(loading,
+                    "При первом запуске сервер установит небольшой контроллер лимитов.");
+            page.addView(loading, pageCardParams());
+            showScrollablePage(page, navPeople);
+            loadManagedUsers();
+            return;
+        }
+        if (loadError != null) {
+            LinearLayout error = createCard();
+            addCardTitle(error, "Не удалось открыть список");
+            addCardSubtitle(error, loadError
+                    + "\n\nУправлять людьми можно только из профиля администратора с root/sudo.");
+            page.addView(error, pageCardParams());
+            addPageAction(page, "Повторить", "Снова подключиться к серверу",
+                    this::loadManagedUsers);
+            showScrollablePage(page, navPeople);
+            return;
+        }
+        addSectionTitle(page, "Пользователи · " + users.size());
+        if (users.isEmpty()) {
+            LinearLayout empty = createCard();
+            addCardTitle(empty, "Пока никого нет");
+            addCardSubtitle(empty,
+                    "Добавь человека и отправь ему секретный код. Админский пароль в код не попадёт.");
+            page.addView(empty, pageCardParams());
+        }
+        for (ServerAccessManager.ManagedUser managed : users) {
+            LinearLayout card = createCard();
+            addCardTitle(card, managed.label + "  ·  " + managed.login);
+            String expiry = managed.forever() ? "бессрочно" : "до " + managed.expires;
+            String daily = managed.dailyMb <= 0 ? "∞" : managed.dailyMb + " МБ/день";
+            String monthly = managed.monthlyMb <= 0 ? "∞" : managed.monthlyMb + " МБ/месяц";
+            String speed = managed.speedMbps <= 0 ? "без ограничения"
+                    : managed.speedMbps + " Мбит/с";
+            addCardSubtitle(card, expiry + "\nТрафик: " + daily + " · " + monthly
+                    + "\nСкорость: " + speed);
+            LinearLayout actions = new LinearLayout(this);
+            actions.setOrientation(LinearLayout.HORIZONTAL);
+            Button code = new Button(this);
+            code.setText("КОД");
+            code.setOnClickListener(v -> showAccessCode(managed));
+            actions.addView(code, new LinearLayout.LayoutParams(0, dp(48), 1));
+            Button extend = new Button(this);
+            extend.setText("ПРОДЛИТЬ");
+            extend.setOnClickListener(v -> showExtendManagedUser(managed));
+            LinearLayout.LayoutParams middle = new LinearLayout.LayoutParams(0, dp(48), 1);
+            middle.leftMargin = dp(5);
+            actions.addView(extend, middle);
+            Button revoke = new Button(this);
+            revoke.setText("ОТОЗВАТЬ");
+            revoke.setTextColor(0xFFFF7272);
+            revoke.setOnClickListener(v -> confirmRevokeManagedUser(managed));
+            LinearLayout.LayoutParams last = new LinearLayout.LayoutParams(0, dp(48), 1);
+            last.leftMargin = dp(5);
+            actions.addView(revoke, last);
+            card.addView(actions);
+            page.addView(card, pageCardParams());
+        }
+        addPageAction(page, "Обновить список", "Получить актуальные данные с сервера",
+                this::loadManagedUsers);
         showScrollablePage(page, navPeople);
+    }
+
+    private void loadManagedUsers() {
+        if (running) {
+            showPeoplePage(null, "Сначала отключи VPN и Telegram-прокси.");
+            return;
+        }
+        speedWorker.execute(() -> {
+            try {
+                List<ServerAccessManager.ManagedUser> users =
+                        ServerAccessManager.list(new SecureStore(this));
+                mainHandler.post(() -> showPeoplePage(users, null));
+            } catch (Exception error) {
+                mainHandler.post(() -> showPeoplePage(null,
+                        error.getMessage() == null ? "Неизвестная ошибка." : error.getMessage()));
+            }
+        });
+    }
+
+    private void showImportAccessCode() {
+        EditText input = new EditText(this);
+        input.setHint("PEL1-…");
+        input.setMinLines(4);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        FrameLayout wrapper = new FrameLayout(this);
+        wrapper.setPadding(dp(20), 0, dp(20), 0);
+        wrapper.addView(input);
+        new AlertDialog.Builder(this)
+                .setTitle("Код доступа")
+                .setMessage("Вставь код от владельца сервера. Он добавится как отдельный профиль.")
+                .setView(wrapper)
+                .setPositiveButton("Добавить", (dialog, which) -> {
+                    try {
+                        ServerProfiles.Profile profile = ServerAccessCode.importCode(
+                                new SecureStore(this), input.getText().toString());
+                        loadSettings();
+                        Toast.makeText(this, "Добавлен сервер «" + profile.name + "»",
+                                Toast.LENGTH_LONG).show();
+                        showHomePage();
+                    } catch (Exception error) {
+                        Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show();
+                    }
+                })
+                .setNegativeButton("Отмена", null)
+                .show();
+    }
+
+    private void showCreateManagedUser() {
+        if (running) {
+            Toast.makeText(this, "Сначала отключи туннель", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        LinearLayout page = createPageContent("Новый пользователь",
+                "У него будет отдельный SSH-доступ без пароля администратора.");
+        EditText label = addServerField(page, "Имя человека", "",
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        EditText login = addServerField(page, "Логин · латиницей", "",
+                InputType.TYPE_CLASS_TEXT);
+        addSectionTitle(page, "Срок действия");
+        RadioGroup expiry = new RadioGroup(this);
+        RadioButton forever = createRadio("Навсегда", "Доступ не истекает");
+        RadioButton day = createRadio("1 день", "Можно продлить позже");
+        RadioButton month = createRadio("30 дней", "Можно продлить позже");
+        expiry.addView(forever);
+        expiry.addView(day);
+        expiry.addView(month);
+        forever.setChecked(true);
+        LinearLayout expiryCard = createCard();
+        expiryCard.addView(expiry);
+        page.addView(expiryCard, pageCardParams());
+        addSectionTitle(page, "Лимиты · 0 означает без ограничений");
+        EditText daily = addServerField(page, "Трафик в день · МБ", "0",
+                InputType.TYPE_CLASS_NUMBER);
+        addQuickChoices(page, daily, "0", "1024", "5120", "10240");
+        EditText monthly = addServerField(page, "Трафик в месяц · МБ", "0",
+                InputType.TYPE_CLASS_NUMBER);
+        addQuickChoices(page, monthly, "0", "10240", "51200", "102400");
+        EditText speed = addServerField(page, "Скорость · Мбит/с", "0",
+                InputType.TYPE_CLASS_NUMBER);
+        addQuickChoices(page, speed, "0", "5", "10", "25");
+        Button create = new Button(this);
+        create.setText("СОЗДАТЬ И ПОЛУЧИТЬ КОД");
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(58));
+        params.topMargin = dp(22);
+        page.addView(create, params);
+        create.setOnClickListener(v -> {
+            String displayName = label.getText().toString().trim();
+            if (displayName.isEmpty()) displayName = login.getText().toString().trim();
+            int days = day.isChecked() ? 1 : month.isChecked() ? 30 : 0;
+            long dailyValue = parseLongOrNegative(daily);
+            long monthlyValue = parseLongOrNegative(monthly);
+            long speedValue = parseLongOrNegative(speed);
+            if (displayName.isEmpty() || dailyValue < 0 || monthlyValue < 0 || speedValue < 0) {
+                Toast.makeText(this, "Проверь имя и числовые лимиты", Toast.LENGTH_LONG).show();
+                return;
+            }
+            String finalDisplayName = displayName;
+            String finalLogin = login.getText().toString();
+            create.setEnabled(false);
+            create.setText("НАСТРАИВАЮ СЕРВЕР…");
+            speedWorker.execute(() -> {
+                try {
+                    ServerAccessManager.ManagedUser managed = ServerAccessManager.create(
+                            new SecureStore(this), finalDisplayName, finalLogin, days,
+                            dailyValue, monthlyValue, speedValue);
+                    mainHandler.post(() -> {
+                        showAccessCode(managed);
+                        showPeoplePage(null, null);
+                    });
+                } catch (Exception error) {
+                    mainHandler.post(() -> {
+                        create.setEnabled(true);
+                        create.setText("СОЗДАТЬ И ПОЛУЧИТЬ КОД");
+                        Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show();
+                    });
+                }
+            });
+        });
+        showScrollablePage(page, navPeople);
+    }
+
+    private long parseLongOrNegative(EditText field) {
+        try {
+            return Long.parseLong(field.getText().toString().trim());
+        } catch (Exception error) {
+            return -1;
+        }
+    }
+
+    private void showAccessCode(ServerAccessManager.ManagedUser managed) {
+        try {
+            String code = ServerAccessCode.create(new SecureStore(this), managed);
+            new AlertDialog.Builder(this)
+                    .setTitle("Код для " + managed.label)
+                    .setMessage(code + "\n\nКод содержит пароль пользователя. Отправляй его только тому, кому доверяешь.")
+                    .setPositiveButton("Копировать", (dialog, which) -> {
+                        ClipboardManager clipboard =
+                                (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                        clipboard.setPrimaryClip(ClipData.newPlainText(
+                                "Pelmeni VPN access", code));
+                        Toast.makeText(this, "Код скопирован", Toast.LENGTH_SHORT).show();
+                    })
+                    .setNeutralButton("Поделиться", (dialog, which) -> {
+                        Intent share = new Intent(Intent.ACTION_SEND);
+                        share.setType("text/plain");
+                        share.putExtra(Intent.EXTRA_TEXT, code);
+                        startActivity(Intent.createChooser(share, "Отправить код доступа"));
+                    })
+                    .setNegativeButton("Закрыть", null)
+                    .show();
+        } catch (Exception error) {
+            Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void showExtendManagedUser(ServerAccessManager.ManagedUser managed) {
+        String[] options = {"Ещё на 1 день", "Ещё на 30 дней", "Сделать бессрочным"};
+        new AlertDialog.Builder(this)
+                .setTitle("Продлить " + managed.label)
+                .setItems(options, (dialog, which) ->
+                        runExtendManagedUser(managed, which == 0 ? 1 : which == 1 ? 30 : 0))
+                .show();
+    }
+
+    private void runExtendManagedUser(ServerAccessManager.ManagedUser managed, int days) {
+        speedWorker.execute(() -> {
+            try {
+                ServerAccessManager.extend(new SecureStore(this), managed.login, days);
+                mainHandler.post(() -> {
+                    Toast.makeText(this, "Срок обновлён", Toast.LENGTH_SHORT).show();
+                    showPeoplePage(null, null);
+                });
+            } catch (Exception error) {
+                mainHandler.post(() ->
+                        Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show());
+            }
+        });
+    }
+
+    private void confirmRevokeManagedUser(ServerAccessManager.ManagedUser managed) {
+        new AlertDialog.Builder(this)
+                .setTitle("Отозвать доступ у " + managed.label + "?")
+                .setMessage("Linux-учётная запись будет удалена с сервера. Старый код перестанет работать.")
+                .setPositiveButton("Отозвать", (dialog, which) -> speedWorker.execute(() -> {
+                    try {
+                        ServerAccessManager.revoke(new SecureStore(this), managed.login);
+                        mainHandler.post(() -> showPeoplePage(null, null));
+                    } catch (Exception error) {
+                        mainHandler.post(() ->
+                                Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show());
+                    }
+                }))
+                .setNegativeButton("Отмена", null)
+                .show();
     }
 
     private void showSettingsHub() {
@@ -1586,6 +1837,15 @@ public class MainActivity extends Activity {
                         else Toast.makeText(this, "Сначала выбери этот сервер",
                                 Toast.LENGTH_SHORT).show();
                     });
+            addPageAction(page, "Перенести на новый сервер",
+                    isActive
+                            ? "Скопировать пользователей и настройки, затем заменить адрес этого профиля"
+                            : "Сначала выбери этот сервер активным",
+                    () -> {
+                        if (isActive) showServerMigration(profile);
+                        else Toast.makeText(this, "Сначала выбери этот сервер",
+                                Toast.LENGTH_SHORT).show();
+                    });
         }
 
         Button saveProfile = new Button(this);
@@ -1658,6 +1918,104 @@ public class MainActivity extends Activity {
             page.addView(delete, deleteParams);
             delete.setOnClickListener(v -> confirmDeleteServerPage(profile));
         }
+        showScrollablePage(page, navAdd);
+    }
+
+    private void showServerMigration(ServerProfiles.Profile profile) {
+        if (running) {
+            Toast.makeText(this, "Сначала отключи туннель", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        LinearLayout page = createPageContent("Перенос сервера",
+                "Старый сервер должен быть доступен хотя бы на время переноса. "
+                        + "Пельмени скопируют управляемых пользователей, сроки и лимиты, "
+                        + "а TLS-ключи безопасно создадут заново.");
+        EditText newName = addServerField(page, "Новое название", profile.name,
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        EditText newHost = addServerField(page, "Новый IP или домен", "",
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        EditText newUser = addServerField(page, "Администратор SSH", profile.user,
+                InputType.TYPE_CLASS_TEXT);
+        EditText newPassword = addServerField(page, "Пароль администратора", "",
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        EditText newPort = addServerField(page, "SSH-порт", profile.sshPort,
+                InputType.TYPE_CLASS_NUMBER);
+        addQuickChoices(page, newPort, "22", "443", "2222");
+
+        LinearLayout warning = createCard();
+        addCardTitle(warning, "Что не переносится");
+        addCardSubtitle(warning,
+                "Чужие сайты, базы данных, firewall и прочие службы Linux не клонируются. "
+                        + "Переносятся только данные Пельмени VPN. Старый сервер автоматически не удаляется.");
+        page.addView(warning, pageCardParams());
+
+        Button migrate = new Button(this);
+        migrate.setText("ПРОВЕРИТЬ И ПЕРЕНЕСТИ");
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(58));
+        params.topMargin = dp(22);
+        page.addView(migrate, params);
+        migrate.setOnClickListener(v -> {
+            String h = newHost.getText().toString().trim();
+            String u = newUser.getText().toString().trim();
+            String pw = newPassword.getText().toString();
+            String portText = newPort.getText().toString().trim();
+            if (!validHost(h) || !validPort(portText) || u.isEmpty() || pw.isEmpty()) {
+                Toast.makeText(this, "Проверь адрес, порт, пользователя и пароль",
+                        Toast.LENGTH_LONG).show();
+                return;
+            }
+            String name = newName.getText().toString().trim();
+            if (name.isEmpty()) name = profile.name;
+            int portValue = Integer.parseInt(portText);
+            String finalName = name;
+            boolean hadTls = TlsTransport.isConfigured(new SecureStore(this));
+            migrate.setEnabled(false);
+            migrate.setText("ПЕРЕНОШУ…");
+            speedWorker.execute(() -> {
+                try {
+                    SecureStore store = new SecureStore(this);
+                    org.json.JSONArray users = ServerAccessManager.exportUsers(store);
+                    ServerAccessManager.Credentials destination =
+                            new ServerAccessManager.Credentials(h, portValue, u, pw);
+                    ServerAccessManager.importUsers(destination, users);
+                    ServerProfiles.Profile moved = new ServerProfiles.Profile(
+                            profile.id, finalName, h, portText, u, profile.socksPort,
+                            profile.windowKiB, profile.packetKiB, profile.mtu);
+                    ServerProfiles.saveAndActivate(store, moved, pw);
+                    TlsTransport.clear(store);
+                    String tlsNote = "";
+                    if (hadTls) {
+                        try {
+                            ServerTlsSetup.Result tls = ServerTlsSetup.install(store);
+                            TlsTransport.save(store, h, tls.port, tls.pkcs12, tls.password);
+                            TlsTransport.snapshotForProfile(store, moved.id);
+                            tlsNote = " TLS на новом сервере создан заново.";
+                        } catch (Exception tlsError) {
+                            tlsNote = " Перенос завершён, но TLS не настроился: "
+                                    + tlsError.getMessage();
+                        }
+                    }
+                    String finalTlsNote = tlsNote;
+                    mainHandler.post(() -> {
+                        loadSettings();
+                        Toast.makeText(this,
+                                "Сервер перенесён. Пользователей: " + users.length()
+                                        + "." + finalTlsNote,
+                                Toast.LENGTH_LONG).show();
+                        showHomePage();
+                    });
+                } catch (Exception error) {
+                    mainHandler.post(() -> {
+                        migrate.setEnabled(true);
+                        migrate.setText("ПРОВЕРИТЬ И ПЕРЕНЕСТИ");
+                        Toast.makeText(this,
+                                "Перенос не выполнен: " + error.getMessage(),
+                                Toast.LENGTH_LONG).show();
+                    });
+                }
+            });
+        });
         showScrollablePage(page, navAdd);
     }
 

@@ -63,33 +63,36 @@
 
             <LinearLayout
                 android:layout_width="match_parent"
-                android:layout_height="96dp"
+                android:layout_height="156dp"
                 android:layout_marginTop="16dp"
+                android:gravity="center"
                 android:orientation="horizontal">
 
                 <Button
                     android:id="@+id/toggleTelegram"
                     android:layout_width="0dp"
-                    android:layout_height="match_parent"
+                    android:layout_height="148dp"
                     android:layout_weight="1"
-                    android:background="@drawable/settings_action_background"
+                    android:background="@drawable/connect_button_background"
                     android:gravity="center"
+                    android:padding="12dp"
                     android:text="ПРОКСИ&#10;ВКЛЮЧИТЬ"
                     android:textColor="#B8BBC3"
-                    android:textSize="16sp"
+                    android:textSize="15sp"
                     android:textStyle="bold" />
 
                 <Button
                     android:id="@+id/toggleVpn"
                     android:layout_width="0dp"
-                    android:layout_height="match_parent"
+                    android:layout_height="148dp"
                     android:layout_marginStart="10dp"
                     android:layout_weight="1"
-                    android:background="@drawable/settings_action_background"
+                    android:background="@drawable/connect_button_background"
                     android:gravity="center"
+                    android:padding="12dp"
                     android:text="VPN&#10;ВКЛЮЧИТЬ"
                     android:textColor="#B8BBC3"
-                    android:textSize="16sp"
+                    android:textSize="15sp"
                     android:textStyle="bold" />
             </LinearLayout>
 

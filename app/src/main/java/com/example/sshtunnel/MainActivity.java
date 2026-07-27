@@ -22,6 +22,8 @@ import android.graphics.Bitmap;
 import android.graphics.drawable.Icon;
 import android.text.InputType;
 import android.view.View;
+import android.view.animation.DecelerateInterpolator;
+import android.view.animation.OvershootInterpolator;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
@@ -79,6 +81,8 @@ public class MainActivity extends Activity {
     private View navHome, navPeople, navSettings, navAdd;
     private View activePage;
     private boolean running;
+    private Boolean lastProxyActive;
+    private Boolean lastVpnActive;
     private boolean receiverRegistered;
     private boolean suppressModeChanges;
     private boolean pendingLiveVpnPermission;
@@ -1706,6 +1710,38 @@ public class MainActivity extends Activity {
         toggleVpn.setTextColor(vpnActive ? 0xFFFFAA5B : 0xFFB8BBC3);
         toggleTelegram.setActivated(proxyActive);
         toggleVpn.setActivated(vpnActive);
+        if (lastProxyActive != null && lastProxyActive != proxyActive) {
+            animateModeButton(toggleTelegram, proxyActive);
+        }
+        if (lastVpnActive != null && lastVpnActive != vpnActive) {
+            animateModeButton(toggleVpn, vpnActive);
+        }
+        lastProxyActive = proxyActive;
+        lastVpnActive = vpnActive;
+    }
+
+    private void animateModeButton(Button button, boolean enabled) {
+        button.animate().cancel();
+        button.setScaleX(1f);
+        button.setScaleY(1f);
+        button.setAlpha(1f);
+        float scale = enabled ? 1.08f : 0.93f;
+        button.animate()
+                .scaleX(scale)
+                .scaleY(scale)
+                .alpha(enabled ? 0.82f : 0.68f)
+                .setDuration(120)
+                .setInterpolator(new DecelerateInterpolator())
+                .withEndAction(() -> button.animate()
+                        .scaleX(1f)
+                        .scaleY(1f)
+                        .alpha(1f)
+                        .setDuration(enabled ? 260 : 180)
+                        .setInterpolator(enabled
+                                ? new OvershootInterpolator(1.7f)
+                                : new DecelerateInterpolator())
+                        .start())
+                .start();
     }
 
     private boolean saveSettings() {

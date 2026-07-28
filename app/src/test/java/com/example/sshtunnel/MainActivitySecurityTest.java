@@ -74,7 +74,8 @@ public class MainActivitySecurityTest {
         String service = readProjectFile(
                 "app/src/main/java/com/example/sshtunnel/TunnelService.java");
 
-        assertTrue(proxy.contains("MAX_CLIENTS = 24"));
+        assertTrue(proxy.contains("Math.max(64, Math.min("));
+        assertTrue(proxy.contains("availableProcessors() * 16"));
         assertFalse(proxy.contains("Executors.newCachedThreadPool()"));
         assertTrue(service.contains("persistFinalTotals()"));
         assertTrue(service.contains("if (finalTotalsPersisted) return;"));

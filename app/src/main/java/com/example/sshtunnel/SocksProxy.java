@@ -23,7 +23,8 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /** A local SOCKS5 CONNECT proxy backed by SSH direct-tcpip channels. */
 final class SocksProxy implements AutoCloseable {
-    private static final int MAX_CLIENTS = 24;
+    private static final int MAX_CLIENTS = Math.max(64, Math.min(
+            128, Runtime.getRuntime().availableProcessors() * 16));
     private final Session session;
     private final int port;
     private final int windowSize;

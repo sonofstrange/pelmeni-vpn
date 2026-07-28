@@ -101,7 +101,14 @@ final class SshHostKeys {
     static Session newPinnedSession(
             SecureStore store, String user, String host, int port) throws Exception {
         ServerProfiles.Profile profile = requireActiveProfile(store);
-        StoredKey stored = read(store);
+        return newPinnedSession(store, profile, user, host, port);
+    }
+
+    static Session newPinnedSession(
+            SecureStore store, ServerProfiles.Profile profile,
+            String user, String host, int port) throws Exception {
+        if (profile == null) throw new JSchException("No server profile");
+        StoredKey stored = read(store, profile);
         if (stored == null
                 || !profile.host.equalsIgnoreCase(host)
                 || parsePort(profile.sshPort) != port
@@ -132,6 +139,11 @@ final class SshHostKeys {
     private static StoredKey read(SecureStore store) {
         ServerProfiles.Profile profile = ServerProfiles.active(store);
         if (profile == null) return null;
+        return read(store, profile);
+    }
+
+    private static StoredKey read(
+            SecureStore store, ServerProfiles.Profile profile) {
         byte[] bytes = store.getEncrypted(storageKey(profile.id));
         if (bytes == null) return null;
         try {

@@ -23,6 +23,7 @@ final class SocksProxy implements AutoCloseable {
     private final int port;
     private final int windowSize;
     private final int packetSize;
+    private final UserTrafficLimiter trafficLimiter;
     private final ExecutorService clients = Executors.newCachedThreadPool();
     private final AtomicLong uploadedBytes = new AtomicLong();
     private final AtomicLong downloadedBytes = new AtomicLong();
@@ -31,10 +32,16 @@ final class SocksProxy implements AutoCloseable {
     private ServerSocket server;
 
     SocksProxy(Session session, int port, int windowSize, int packetSize) {
+        this(session, port, windowSize, packetSize, null);
+    }
+
+    SocksProxy(Session session, int port, int windowSize, int packetSize,
+               UserTrafficLimiter trafficLimiter) {
         this.session = session;
         this.port = port;
         this.windowSize = windowSize;
         this.packetSize = packetSize;
+        this.trafficLimiter = trafficLimiter;
     }
 
     synchronized void start() throws IOException {
@@ -113,14 +120,20 @@ final class SocksProxy implements AutoCloseable {
         }
     }
 
-    private static void copy(InputStream input, OutputStream output, AtomicLong counter) {
+    private void copy(InputStream input, OutputStream output, AtomicLong counter) {
         try {
             byte[] buffer = new byte[NetworkTuning.STREAM_BUFFER_BYTES];
             for (int count; (count = readAvailable(input, buffer)) != -1;) {
-                output.write(buffer, 0, count);
+                int allowed = trafficLimiter == null
+                        ? count : trafficLimiter.acquire(count);
+                if (allowed <= 0) return;
+                output.write(buffer, 0, allowed);
                 output.flush();
-                counter.addAndGet(count);
+                counter.addAndGet(allowed);
+                if (allowed < count) return;
             }
+        } catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt();
         } catch (IOException ignored) {
         }
     }

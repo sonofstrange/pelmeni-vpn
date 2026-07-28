@@ -16,7 +16,9 @@ public class TunnelService extends Service {
     public static final String ACTION_STATUS = "com.example.sshtunnel.STATUS";
 
     private static final String CHANNEL = "tunnel";
+    private static final String LIMIT_CHANNEL = "user_limits_v2";
     private static final int ID = 42;
+    private static final int LIMIT_ID = 43;
 
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final ScheduledExecutorService statsWorker = Executors.newSingleThreadScheduledExecutor();
@@ -27,6 +29,7 @@ public class TunnelService extends Service {
     private volatile Session vpnSession;
     private volatile SocksProxy telegramSocksProxy;
     private volatile SocksProxy vpnSocksProxy;
+    private volatile UserTrafficLimiter trafficLimiter;
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
     private volatile Network activeUnderlyingNetwork;
@@ -39,8 +42,11 @@ public class TunnelService extends Service {
     private long totalUploaded;
     private long totalDownloaded;
     private long lastSampleBytes;
+    private long lastPolicyBytes;
     private long lastSampleTime;
     private int statsTicks;
+    private int policySyncTicks;
+    private long lastUsageResetAt;
     private volatile String currentStatus = "Подключение…";
     private volatile long currentSpeed;
     private volatile int currentLatency = -1;
@@ -92,6 +98,7 @@ public class TunnelService extends Service {
             sessionUploaded = 0;
             sessionDownloaded = 0;
             lastSampleBytes = 0;
+            lastPolicyBytes = 0;
             lastSampleTime = SystemClock.elapsedRealtime();
             statsTicks = 0;
             startStats();
@@ -324,21 +331,25 @@ public class TunnelService extends Service {
         Session newVpnSession = null;
         SocksProxy newTelegramProxy = null;
         SocksProxy newVpnProxy = null;
+        UserTrafficLimiter newTrafficLimiter = null;
         try {
             if (telegramEnabled && vpnEnabled) {
                 newVpnSession = connectSession(
                         store, host, user, password, sshPort, tlsProtected,
                         windowSize, underlyingNetwork);
             }
+            syncUserPolicy(newSession);
+            newTrafficLimiter = createTrafficLimiter(store);
             if (telegramEnabled) {
                 newTelegramProxy = new SocksProxy(
-                        newSession, telegramPort, windowSize, packetSize);
+                        newSession, telegramPort, windowSize, packetSize,
+                        newTrafficLimiter);
                 newTelegramProxy.start();
             }
             if (vpnEnabled) {
                 newVpnProxy = new SocksProxy(
                         newVpnSession == null ? newSession : newVpnSession,
-                        vpnPort, windowSize, packetSize);
+                        vpnPort, windowSize, packetSize, newTrafficLimiter);
                 newVpnProxy.start();
             }
             if (!wanted || forceReconnect) throw new JSchException("reconnect requested");
@@ -347,6 +358,7 @@ public class TunnelService extends Service {
             vpnSession = newVpnSession;
             telegramSocksProxy = newTelegramProxy;
             vpnSocksProxy = newVpnProxy;
+            trafficLimiter = newTrafficLimiter;
             connected = true;
         } catch (Exception error) {
             if (newTelegramProxy != null) newTelegramProxy.close();
@@ -400,8 +412,48 @@ public class TunnelService extends Service {
                     || (vpnProxy != null && !vpnProxy.isRunning())) {
                 throw new Exception("local forwarding stopped");
             }
+            if (++policySyncTicks >= 30) {
+                policySyncTicks = 0;
+                syncUserPolicy(current);
+            }
             sleepInterruptibly(2_000L);
         }
+    }
+
+    private void syncUserPolicy(Session current) {
+        SecureStore store = new SecureStore(this);
+        ServerProfiles.Profile profile = ServerProfiles.active(store);
+        long previousResetAt = profile == null ? 0
+                : UserAccessPolicy.usage(store, profile.id).resetAt;
+        try {
+            if (profile != null) {
+                UserAccessPolicy.syncFromServer(store, profile.id, current);
+            }
+        } catch (Exception ignored) {
+            // Administrator profiles and older servers do not expose a user policy.
+        }
+        UserTrafficLimiter limiter = trafficLimiter;
+        if (limiter != null && profile != null) {
+            UserAccessPolicy.Usage usage =
+                    UserAccessPolicy.usage(store, profile.id);
+            if (usage.resetAt > previousResetAt
+                    && usage.resetAt > lastUsageResetAt) {
+                long[] traffic = trafficSnapshot();
+                lastPolicyBytes = traffic[0] + traffic[1];
+                lastUsageResetAt = usage.resetAt;
+            }
+            limiter.refresh(UserAccessPolicy.load(store, profile.id), usage);
+        }
+    }
+
+    private UserTrafficLimiter createTrafficLimiter(SecureStore store) {
+        UserTrafficLimiter limiter = new UserTrafficLimiter();
+        ServerProfiles.Profile profile = ServerProfiles.active(store);
+        if (profile != null) {
+            limiter.refresh(UserAccessPolicy.load(store, profile.id),
+                    UserAccessPolicy.usage(store, profile.id));
+        }
+        return limiter;
     }
 
     private synchronized void startStats() {
@@ -428,6 +480,7 @@ public class TunnelService extends Service {
 
         statsTicks++;
         if (statsTicks % 30 == 0) persistTotals();
+        if (statsTicks % 5 == 0) recordPolicyUsage(bytes);
 
         Intent statsIntent = new Intent(ACTION_STATUS).setPackage(getPackageName())
                 .putExtra("speed_bps", speed)
@@ -489,6 +542,7 @@ public class TunnelService extends Service {
         SocksProxy vpnProxy = vpnSocksProxy;
         telegramSocksProxy = null;
         vpnSocksProxy = null;
+        trafficLimiter = null;
         collectAndClose(telegramProxy);
         collectAndClose(vpnProxy);
         Session current = session;
@@ -528,9 +582,41 @@ public class TunnelService extends Service {
 
     private void persistTotals() {
         long[] traffic = trafficSnapshot();
+        recordPolicyUsage(traffic[0] + traffic[1]);
         SecureStore store = new SecureStore(this);
         store.putLong("total_uploaded", totalUploaded + traffic[0]);
         store.putLong("total_downloaded", totalDownloaded + traffic[1]);
+    }
+
+    private void recordPolicyUsage(long currentBytes) {
+        long added = Math.max(0, currentBytes - lastPolicyBytes);
+        lastPolicyBytes = currentBytes;
+        if (added <= 0) return;
+        SecureStore store = new SecureStore(this);
+        ServerProfiles.Profile profile = ServerProfiles.active(store);
+        if (profile == null) return;
+        UserAccessPolicy.Alert alert =
+                UserAccessPolicy.record(store, profile.id, added);
+        if (alert == null) return;
+        Intent open = new Intent(this, MainActivity.class);
+        PendingIntent contentIntent = PendingIntent.getActivity(
+                this, LIMIT_ID, open,
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+        Notification notification = new Notification.Builder(this, LIMIT_CHANNEL)
+                .setSmallIcon(android.R.drawable.stat_notify_error)
+                .setContentTitle(alert.title)
+                .setContentText(alert.text)
+                .setStyle(new Notification.BigTextStyle().bigText(alert.text))
+                .setAutoCancel(true)
+                .setCategory(Notification.CATEGORY_ALARM)
+                .setPriority(Notification.PRIORITY_MAX)
+                .setDefaults(Notification.DEFAULT_ALL)
+                .setContentIntent(contentIntent)
+                .build();
+        getSystemService(NotificationManager.class).notify(
+                alert.critical ? LIMIT_ID + 1 : LIMIT_ID, notification);
+        sendBroadcast(new Intent(ACTION_STATUS).setPackage(getPackageName())
+                .putExtra("limit_warning", alert.title + "\n" + alert.text));
     }
 
     private void send(String text) {
@@ -554,6 +640,16 @@ public class TunnelService extends Service {
         String metrics = "Скорость: " + formatRate(currentSpeed) + " · Пинг: " + latency;
         SecureStore store = new SecureStore(this);
         ServerProfiles.Profile activeProfile = ServerProfiles.active(store);
+        String limitWarning = "";
+        if (activeProfile != null) {
+            UserAccessPolicy.Policy policy =
+                    UserAccessPolicy.load(store, activeProfile.id);
+            if (policy.configured) {
+                limitWarning = UserAccessPolicy.warning(
+                        policy, UserAccessPolicy.usage(
+                                store, activeProfile.id));
+            }
+        }
         String title = Branding.appName(this)
                 + (activeProfile == null ? "" : " · " + activeProfile.name)
                 + " · " + TunnelMode.label(store);
@@ -562,7 +658,10 @@ public class TunnelService extends Service {
                 .setContentTitle(title)
                 .setContentText(metrics)
                 .setSubText(text)
-                .setStyle(new Notification.BigTextStyle().bigText(text + "\n" + metrics))
+                .setStyle(new Notification.BigTextStyle().bigText(
+                        text + "\n" + metrics
+                                + (limitWarning.isEmpty()
+                                ? "" : "\n⚠ " + limitWarning)))
                 .setOngoing(wanted)
                 .setContentIntent(contentIntent)
                 .addAction(new Notification.Action.Builder(null, "Отключить", stopIntent).build())
@@ -581,6 +680,12 @@ public class TunnelService extends Service {
         if (Build.VERSION.SDK_INT >= 26) {
             getSystemService(NotificationManager.class).createNotificationChannel(
                     new NotificationChannel(CHANNEL, "Пельмени VPN", NotificationManager.IMPORTANCE_LOW));
+            NotificationChannel limits = new NotificationChannel(
+                    LIMIT_CHANNEL, "Предупреждения о лимитах",
+                    NotificationManager.IMPORTANCE_HIGH);
+            limits.enableVibration(true);
+            getSystemService(NotificationManager.class)
+                    .createNotificationChannel(limits);
         }
     }
 

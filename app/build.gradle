@@ -9,8 +9,8 @@ android {
         applicationId 'com.example.sshtunnel'
         minSdk 26
         targetSdk 35
-        versionCode 54
-        versionName '1.29-beta.1'
+        versionCode 55
+        versionName '1.29'
     }
 
     buildTypes {
@@ -30,6 +30,8 @@ android {
 
 dependencies {
     implementation 'com.github.mwiede:jsch:0.2.21'
+    implementation 'com.journeyapps:zxing-android-embedded:4.3.0'
+    implementation 'androidx.core:core:1.13.1'
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.json:json:20240303'
 }

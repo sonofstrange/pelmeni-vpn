@@ -33,6 +33,45 @@ final class TlsTransport {
                 && !store.getPlain("tls_host", "").isEmpty();
     }
 
+    static boolean isConfiguredForProfile(
+            SecureStore store, ServerProfiles.Profile profile) {
+        if (profile == null) return false;
+        ServerProfiles.Profile active = ServerProfiles.active(store);
+        if (active != null && active.id.equals(profile.id)) {
+            return isConfigured(store)
+                    && profile.host.equalsIgnoreCase(
+                    store.getPlain("tls_host", ""));
+        }
+        return store.getEncrypted(profileKey(profile.id, BUNDLE_KEY)) != null
+                && store.getEncrypted(profileKey(profile.id, PASSWORD_KEY)) != null
+                && profile.host.equalsIgnoreCase(store.getPlain(
+                profileKey(profile.id, "tls_host"), ""));
+    }
+
+    static int portForProfile(SecureStore store, ServerProfiles.Profile profile) {
+        if (profile == null) return DEFAULT_PORT;
+        ServerProfiles.Profile active = ServerProfiles.active(store);
+        String key = active != null && active.id.equals(profile.id)
+                ? "tls_port" : profileKey(profile.id, "tls_port");
+        try {
+            int value = Integer.parseInt(store.getPlain(
+                    key, Integer.toString(DEFAULT_PORT)));
+            return value >= 1 && value <= 65535 ? value : DEFAULT_PORT;
+        } catch (Exception ignored) {
+            return DEFAULT_PORT;
+        }
+    }
+
+    static String portsForProfile(
+            SecureStore store, ServerProfiles.Profile profile) {
+        if (profile == null) return Integer.toString(DEFAULT_PORT);
+        ServerProfiles.Profile active = ServerProfiles.active(store);
+        String key = active != null && active.id.equals(profile.id)
+                ? "tls_ports" : profileKey(profile.id, "tls_ports");
+        return store.getPlain(
+                key, Integer.toString(portForProfile(store, profile)));
+    }
+
     static boolean isEnabledFor(SecureStore store, String host) {
         return store.getBoolean("tls_enabled", false)
                 && isConfigured(store)

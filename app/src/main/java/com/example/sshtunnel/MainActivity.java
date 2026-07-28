@@ -8,9 +8,11 @@ import android.content.ComponentName;
 import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
 import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -34,14 +36,24 @@ import android.widget.Toast;
 
 import org.json.JSONObject;
 
+import com.google.zxing.BarcodeFormat;
+import com.google.zxing.EncodeHintType;
+import com.google.zxing.common.BitMatrix;
+import com.google.zxing.integration.android.IntentIntegrator;
+import com.google.zxing.integration.android.IntentResult;
+import com.google.zxing.qrcode.QRCodeWriter;
+import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel;
+
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -69,7 +81,7 @@ public class MainActivity extends Activity {
     private CheckBox showPassword, autoReconnect, startOnBoot, enableVpn, enableTelegram;
     private ScrollView mainScroll;
     private FrameLayout contentContainer;
-    private View navHome, navSettings, navAdd;
+    private View navHome, navPeople, navSettings, navAdd;
     private View debugPanel;
     private View activePage;
     private boolean running;
@@ -78,6 +90,7 @@ public class MainActivity extends Activity {
     private volatile boolean serverSetupRunning;
     private volatile boolean updateCheckRunning;
     private volatile boolean hostKeyCheckRunning;
+    private String peopleServerId = "";
     private final ExecutorService speedWorker = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
@@ -88,6 +101,15 @@ public class MainActivity extends Activity {
                 return;
             }
             if (intent.hasExtra("speed_bps")) updateStats(intent);
+            String limitWarning = intent.getStringExtra("limit_warning");
+            if (limitWarning != null && !limitWarning.isEmpty()
+                    && !isFinishing() && !isDestroyed()) {
+                new AlertDialog.Builder(MainActivity.this)
+                        .setTitle("Лимит доступа")
+                        .setMessage(limitWarning)
+                        .setPositiveButton("Понятно", null)
+                        .show();
+            }
             update(intent.getStringExtra("status"));
         }
     };
@@ -130,6 +152,7 @@ public class MainActivity extends Activity {
         mainScroll = findViewById(R.id.mainScroll);
         contentContainer = findViewById(R.id.contentContainer);
         navHome = findViewById(R.id.navHome);
+        navPeople = findViewById(R.id.navPeople);
         navSettings = findViewById(R.id.navSettings);
         navAdd = findViewById(R.id.navAdd);
 
@@ -185,6 +208,7 @@ public class MainActivity extends Activity {
         findViewById(R.id.serverProfileCard).setOnClickListener(v -> showServerList());
         splitTunnelButton.setOnClickListener(v -> showSplitTunnelPage());
         navHome.setOnClickListener(v -> showHomePage());
+        navPeople.setOnClickListener(v -> showPeoplePage(null, null));
         navSettings.setOnClickListener(v -> showSettingsHub());
         navAdd.setOnClickListener(v -> showServerEditor(null));
         setSelectedNav(navHome);
@@ -217,6 +241,7 @@ public class MainActivity extends Activity {
         addToggleCard(page, "Запуск после перезагрузки",
                 "Попытаться вернуть последнее активное подключение после запуска телефона.",
                 startOnBoot.isChecked(), checked -> startOnBoot.setChecked(checked));
+        addAccessPolicyCard(page);
 
         addSectionTitle(page, "Обновления");
         LinearLayout channel = createCard();
@@ -318,8 +343,616 @@ public class MainActivity extends Activity {
         setSelectedNav(navHome);
     }
 
+    private void showPeoplePage(
+            List<ServerAccessManager.ManagedUser> users, String loadError) {
+        SecureStore store = new SecureStore(this);
+        ServerProfiles.Profile admin = peopleServer(store);
+        LinearLayout page = createPageContent("Люди",
+                admin == null
+                        ? "Коды доступа и отдельные пользователи VPN."
+                        : "Пользователи сервера «" + admin.name + "».");
+
+        addSectionTitle(page, "Подключение по приглашению");
+        addPageAction(page, "Ввести код доступа",
+                "Добавить сервер по секретному коду PEL1", this::showImportAccessCode);
+        addPageAction(page, "Сканировать QR-код",
+                "Получить сервер и настройки камерой", this::scanAccessQr);
+
+        if (admin == null) {
+            LinearLayout empty = createCard();
+            addCardTitle(empty, "Нет профиля администратора");
+            addCardSubtitle(empty,
+                    "Для создания пользователей добавь сервер с root/sudo-доступом. "
+                            + "Пользовательские профили pel_* здесь не считаются администраторами.");
+            page.addView(empty, pageCardParams());
+            showScrollablePage(page, navPeople);
+            return;
+        }
+
+        List<ServerProfiles.Profile> admins = adminServers(store);
+        if (admins.size() > 1) {
+            addSectionTitle(page, "Сервер администратора");
+            LinearLayout selector = createCard();
+            RadioGroup choices = new RadioGroup(this);
+            for (ServerProfiles.Profile profile : admins) {
+                RadioButton choice = createRadio(
+                        profile.name, profile.host + ":" + profile.sshPort);
+                choice.setTag(profile.id);
+                choice.setChecked(profile.id.equals(admin.id));
+                choices.addView(choice);
+            }
+            choices.setOnCheckedChangeListener((group, checkedId) -> {
+                RadioButton selected = group.findViewById(checkedId);
+                if (selected == null) return;
+                peopleServerId = String.valueOf(selected.getTag());
+                showPeoplePage(null, null);
+            });
+            selector.addView(choices);
+            page.addView(selector, pageCardParams());
+        }
+
+        addSectionTitle(page, "Управление");
+        addPageAction(page, "Добавить человека",
+                "Создать отдельный SSH-логин, срок и лимиты",
+                this::showCreateManagedUser);
+
+        if (users == null && loadError == null) {
+            LinearLayout loading = createCard();
+            addCardTitle(loading, "Загружаю пользователей…");
+            addCardSubtitle(loading,
+                    "Приложение проверяет состояние контроллера на сервере.");
+            page.addView(loading, pageCardParams());
+            showScrollablePage(page, navPeople);
+            loadManagedUsers();
+            return;
+        }
+        if (loadError != null) {
+            LinearLayout error = createCard();
+            addCardTitle(error, "Не удалось открыть список");
+            addCardSubtitle(error, loadError
+                    + "\n\nПодтверди SSH host key этого профиля подключением "
+                    + "и проверь права root/sudo.");
+            page.addView(error, pageCardParams());
+            addPageAction(page, "Повторить", "Снова запросить данные сервера",
+                    this::loadManagedUsers);
+            showScrollablePage(page, navPeople);
+            return;
+        }
+
+        addSectionTitle(page, "Пользователи · " + users.size());
+        if (users.isEmpty()) {
+            LinearLayout empty = createCard();
+            addCardTitle(empty, "Пока никого нет");
+            addCardSubtitle(empty,
+                    "Создай пользователя и передай ему код или QR лично.");
+            page.addView(empty, pageCardParams());
+        }
+        for (ServerAccessManager.ManagedUser managed : users) {
+            LinearLayout card = createCard();
+            addCardTitle(card, managed.label + " · " + managed.login);
+            String expires = managed.forever()
+                    ? "бессрочно" : "до " + managed.expires;
+            String state = managed.expired ? "ИСТЁК"
+                    : managed.blocked ? "ЛИМИТ ИСЧЕРПАН"
+                    : managed.policyHealthy ? "АКТИВЕН" : "ТРЕБУЕТ ПРОВЕРКИ";
+            addCardSubtitle(card, state + " · " + expires
+                    + "\nСегодня: " + formatBytes(managed.dayBytes)
+                    + limitSuffix(managed.dailyMb)
+                    + " · месяц: " + formatBytes(managed.monthBytes)
+                    + limitSuffix(managed.monthlyMb)
+                    + "\nСкорость: " + (managed.speedMbps <= 0
+                    ? "без ограничения" : managed.speedMbps + " Мбит/с"));
+            addManagedUserAction(card, "СТАТУС", false,
+                    () -> showManagedUserStatus(managed));
+            addManagedUserAction(card, "КОД И QR", false,
+                    () -> showAccessCode(managed));
+            addManagedUserAction(card, "ПРОДЛИТЬ", false,
+                    () -> showExtendManagedUser(managed));
+            addManagedUserAction(card, "ИЗМЕНИТЬ ЛИМИТЫ", false,
+                    () -> showEditManagedUserLimits(managed));
+            addManagedUserAction(card, "ОБНУЛИТЬ ТРАФИК", true,
+                    () -> confirmResetManagedUserUsage(managed));
+            addManagedUserAction(card, "ОТОЗВАТЬ ДОСТУП", true,
+                    () -> confirmRevokeManagedUser(managed));
+            page.addView(card, pageCardParams());
+        }
+        addPageAction(page, "Обновить список",
+                "Получить актуальный статус с сервера", this::loadManagedUsers);
+        showScrollablePage(page, navPeople);
+    }
+
+    private String limitSuffix(long limitMb) {
+        return limitMb <= 0 ? "" : " / " + limitMb + " МБ";
+    }
+
+    private void addManagedUserAction(
+            LinearLayout card, String label, boolean danger, Runnable action) {
+        Button button = new Button(this);
+        button.setText(label);
+        button.setTextColor(danger ? 0xFFFF7777 : UI_PALE);
+        button.setBackgroundResource(R.drawable.button_secondary_background);
+        button.setOnClickListener(view -> action.run());
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(48));
+        params.topMargin = dp(8);
+        card.addView(button, params);
+    }
+
+    private void loadManagedUsers() {
+        ServerProfiles.Profile server = peopleServer(new SecureStore(this));
+        if (server == null) {
+            showPeoplePage(null, "Сервер администратора не выбран.");
+            return;
+        }
+        speedWorker.execute(() -> {
+            try {
+                List<ServerAccessManager.ManagedUser> users =
+                        ServerAccessManager.list(new SecureStore(this), server);
+                mainHandler.post(() -> showPeoplePage(users, null));
+            } catch (Exception error) {
+                String message = error.getMessage() == null
+                        ? "Неизвестная ошибка." : error.getMessage();
+                mainHandler.post(() -> showPeoplePage(null, message));
+            }
+        });
+    }
+
+    private List<ServerProfiles.Profile> adminServers(SecureStore store) {
+        List<ServerProfiles.Profile> result = new ArrayList<>();
+        for (ServerProfiles.Profile profile : ServerProfiles.list(store)) {
+            if (!profile.user.startsWith("pel_")
+                    && !ServerProfiles.password(store, profile.id).isEmpty()) {
+                result.add(profile);
+            }
+        }
+        return result;
+    }
+
+    private ServerProfiles.Profile peopleServer(SecureStore store) {
+        List<ServerProfiles.Profile> admins = adminServers(store);
+        for (ServerProfiles.Profile profile : admins) {
+            if (profile.id.equals(peopleServerId)) return profile;
+        }
+        ServerProfiles.Profile active = ServerProfiles.active(store);
+        for (ServerProfiles.Profile profile : admins) {
+            if (active != null && profile.id.equals(active.id)) {
+                peopleServerId = profile.id;
+                return profile;
+            }
+        }
+        if (admins.isEmpty()) return null;
+        peopleServerId = admins.get(0).id;
+        return admins.get(0);
+    }
+
+    private void showCreateManagedUser() {
+        LinearLayout page = createPageContent(
+                "Новый пользователь", "Отдельные учётные данные и ограничения.");
+        EditText label = addServerField(page, "Имя человека", "",
+                InputType.TYPE_CLASS_TEXT);
+        EditText login = addServerField(page, "Логин латиницей", "",
+                InputType.TYPE_CLASS_TEXT);
+        EditText duration = addServerField(page,
+                "Срок · дней · 0 навсегда", "30", InputType.TYPE_CLASS_NUMBER);
+        addQuickChoices(page, duration, "0", "1", "7", "30", "365");
+        EditText daily = addServerField(page,
+                "Трафик в день · МБ · 0 без лимита", "0",
+                InputType.TYPE_CLASS_NUMBER);
+        addQuickChoices(page, daily, "0", "1024", "5120", "10240");
+        EditText monthly = addServerField(page,
+                "Трафик в месяц · МБ · 0 без лимита", "0",
+                InputType.TYPE_CLASS_NUMBER);
+        addQuickChoices(page, monthly, "0", "10240", "51200", "102400");
+        EditText speed = addServerField(page,
+                "Скорость · Мбит/с · 0 без лимита", "0",
+                InputType.TYPE_CLASS_NUMBER);
+        addQuickChoices(page, speed, "0", "5", "10", "25");
+
+        SecureStore store = new SecureStore(this);
+        ServerProfiles.Profile admin = peopleServer(store);
+        boolean tlsAvailable = TlsTransport.isConfiguredForProfile(store, admin);
+        CheckBox useTls = addToggleCard(page, "Добавить TLS",
+                tlsAvailable
+                        ? "Сертификат будет выдан вместе с кодом после проверки SSH host key."
+                        : "На выбранном сервере TLS пока не настроен.",
+                tlsAvailable, ignored -> {
+                });
+        useTls.setEnabled(tlsAvailable);
+
+        Button create = new Button(this);
+        create.setText("СОЗДАТЬ И ПОЛУЧИТЬ КОД");
+        create.setBackgroundResource(R.drawable.button_primary_background);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(56));
+        params.topMargin = dp(18);
+        page.addView(create, params);
+        create.setOnClickListener(view -> {
+            String displayName = label.getText().toString().trim();
+            if (displayName.isEmpty()) displayName = login.getText().toString().trim();
+            long days = nonNegative(duration);
+            long dailyMb = nonNegative(daily);
+            long monthlyMb = nonNegative(monthly);
+            long speedMbps = nonNegative(speed);
+            if (displayName.isEmpty() || days < 0 || days > 36500
+                    || dailyMb < 0 || monthlyMb < 0 || speedMbps < 0) {
+                Toast.makeText(this, "Проверь имя, срок и лимиты",
+                        Toast.LENGTH_LONG).show();
+                return;
+            }
+            String finalName = displayName;
+            String requestedLogin = login.getText().toString().trim();
+            boolean includeTls = useTls.isChecked();
+            create.setEnabled(false);
+            create.setText("НАСТРАИВАЮ СЕРВЕР…");
+            speedWorker.execute(() -> {
+                try {
+                    SecureStore currentStore = new SecureStore(this);
+                    ServerAccessManager.ManagedUser managed =
+                            ServerAccessManager.create(
+                                    currentStore, peopleServer(currentStore),
+                                    finalName, requestedLogin,
+                                    (int) days, dailyMb, monthlyMb, speedMbps,
+                                    includeTls);
+                    mainHandler.post(() -> {
+                        showAccessCode(managed);
+                        showPeoplePage(null, null);
+                    });
+                } catch (Exception error) {
+                    mainHandler.post(() -> {
+                        create.setEnabled(true);
+                        create.setText("СОЗДАТЬ И ПОЛУЧИТЬ КОД");
+                        Toast.makeText(this, safeMessage(error),
+                                Toast.LENGTH_LONG).show();
+                    });
+                }
+            });
+        });
+        showScrollablePage(page, navPeople);
+    }
+
+    private void addAccessPolicyCard(LinearLayout page) {
+        SecureStore store = new SecureStore(this);
+        ServerProfiles.Profile active = ServerProfiles.active(store);
+        if (active == null) return;
+        UserAccessPolicy.Policy policy = UserAccessPolicy.load(store, active.id);
+        if (!policy.configured) return;
+
+        addSectionTitle(page, "Доступ");
+        UserAccessPolicy.Usage usage = UserAccessPolicy.usage(store, active.id);
+        LinearLayout card = createCard();
+        addCardTitle(card, "Лимиты профиля «" + active.name + "»");
+        StringBuilder details = new StringBuilder();
+        if (!policy.expires.isEmpty()) {
+            details.append("Действует до ").append(policy.expires);
+        } else {
+            details.append("Без ограничения срока");
+        }
+        if (policy.dailyMb > 0) {
+            details.append("\nЗа день: ")
+                    .append(formatPolicyUsage(usage.dayBytes, policy.dailyMb));
+        }
+        if (policy.monthlyMb > 0) {
+            details.append("\nЗа месяц: ")
+                    .append(formatPolicyUsage(usage.monthBytes, policy.monthlyMb));
+        }
+        if (policy.speedMbps > 0) {
+            details.append("\nСкорость: до ")
+                    .append(policy.speedMbps).append(" Мбит/с");
+        }
+        if (!policy.hasLimits()) {
+            details.append("\nТрафик и скорость без ограничений");
+        }
+        String warning = UserAccessPolicy.warning(policy, usage);
+        if (!warning.isEmpty()) details.append("\n").append(warning);
+        addCardSubtitle(card, details.toString());
+        page.addView(card, pageCardParams());
+    }
+
+    private String formatPolicyUsage(long bytes, long limitMb) {
+        return String.format(Locale.getDefault(), "%.1f из %d МБ",
+                bytes / 1024.0 / 1024.0, limitMb);
+    }
+
+    private long nonNegative(EditText field) {
+        try {
+            long value = Long.parseLong(field.getText().toString().trim());
+            return value < 0 ? -1 : value;
+        } catch (Exception ignored) {
+            return -1;
+        }
+    }
+
+    private String safeMessage(Exception error) {
+        return error.getMessage() == null ? "Неизвестная ошибка." : error.getMessage();
+    }
+
+    private void showManagedUserStatus(ServerAccessManager.ManagedUser managed) {
+        String message = "Логин: " + managed.login
+                + "\nСрок: " + (managed.forever() ? "бессрочно" : managed.expires)
+                + "\nСегодня: " + formatBytes(managed.dayBytes)
+                + limitSuffix(managed.dailyMb)
+                + "\nЗа месяц: " + formatBytes(managed.monthBytes)
+                + limitSuffix(managed.monthlyMb)
+                + "\nСкорость: " + (managed.speedMbps <= 0
+                ? "без ограничения" : managed.speedMbps + " Мбит/с")
+                + "\nКонтроллер: " + (managed.policyHealthy
+                ? "работает" : "требует проверки")
+                + (managed.policyError.isEmpty()
+                ? "" : "\nОшибка: " + managed.policyError);
+        new AlertDialog.Builder(this)
+                .setTitle(managed.label)
+                .setMessage(message)
+                .setPositiveButton("Обновить", (dialog, which) -> loadManagedUsers())
+                .setNegativeButton("Закрыть", null)
+                .show();
+    }
+
+    private void showAccessCode(ServerAccessManager.ManagedUser managed) {
+        String code = managed.accessCode;
+        if (code == null || code.isEmpty()) {
+            Toast.makeText(this, "Сервер не вернул код доступа.",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        try {
+            LinearLayout content = new LinearLayout(this);
+            content.setOrientation(LinearLayout.VERTICAL);
+            content.setPadding(dp(20), dp(8), dp(20), 0);
+            ImageView qr = new ImageView(this);
+            qr.setImageBitmap(createQrBitmap(code, 900));
+            qr.setAdjustViewBounds(true);
+            content.addView(qr, new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, dp(300)));
+            TextView warning = new TextView(this);
+            warning.setText("QR содержит пароль пользователя. Передавай его только лично.");
+            warning.setTextColor(UI_MUTED);
+            warning.setPadding(0, dp(8), 0, 0);
+            content.addView(warning);
+            new AlertDialog.Builder(this)
+                    .setTitle("Код для " + managed.label)
+                    .setView(content)
+                    .setPositiveButton("Копировать", (dialog, which) -> {
+                        ClipboardManager clipboard = (ClipboardManager)
+                                getSystemService(CLIPBOARD_SERVICE);
+                        clipboard.setPrimaryClip(ClipData.newPlainText(
+                                "Pelmeni VPN access", code));
+                        Toast.makeText(this, "Код скопирован",
+                                Toast.LENGTH_SHORT).show();
+                    })
+                    .setNeutralButton("Поделиться", (dialog, which) -> {
+                        Intent share = new Intent(Intent.ACTION_SEND);
+                        share.setType("text/plain");
+                        share.putExtra(Intent.EXTRA_TEXT, code);
+                        startActivity(Intent.createChooser(
+                                share, "Отправить код доступа"));
+                    })
+                    .setNegativeButton("Закрыть", null)
+                    .show();
+        } catch (Exception error) {
+            Toast.makeText(this, safeMessage(error), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private Bitmap createQrBitmap(String value, int size) throws Exception {
+        Map<EncodeHintType, Object> hints = new EnumMap<>(EncodeHintType.class);
+        hints.put(EncodeHintType.CHARACTER_SET, "UTF-8");
+        hints.put(EncodeHintType.ERROR_CORRECTION, ErrorCorrectionLevel.M);
+        hints.put(EncodeHintType.MARGIN, 2);
+        BitMatrix matrix = new QRCodeWriter().encode(
+                value, BarcodeFormat.QR_CODE, size, size, hints);
+        int[] pixels = new int[size * size];
+        for (int y = 0; y < size; y++) {
+            int offset = y * size;
+            for (int x = 0; x < size; x++) {
+                pixels[offset + x] = matrix.get(x, y)
+                        ? 0xFF000000 : 0xFFFFFFFF;
+            }
+        }
+        Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        bitmap.setPixels(pixels, 0, size, 0, 0, size, size);
+        return bitmap;
+    }
+
+    private void showImportAccessCode() {
+        EditText input = new EditText(this);
+        input.setHint("PEL1-…");
+        input.setMinLines(4);
+        input.setInputType(InputType.TYPE_CLASS_TEXT
+                | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        FrameLayout wrapper = new FrameLayout(this);
+        wrapper.setPadding(dp(20), 0, dp(20), 0);
+        wrapper.addView(input);
+        new AlertDialog.Builder(this)
+                .setTitle("Код доступа")
+                .setMessage("Он добавится как отдельный профиль. "
+                        + "Пароль будет сохранён в Android Keystore.")
+                .setView(wrapper)
+                .setPositiveButton("Добавить", (dialog, which) ->
+                        importAccessCode(input.getText().toString()))
+                .setNegativeButton("Отмена", null)
+                .show();
+    }
+
+    private void scanAccessQr() {
+        IntentIntegrator scanner = new IntentIntegrator(this);
+        scanner.setDesiredBarcodeFormats(IntentIntegrator.QR_CODE);
+        scanner.setPrompt("Наведи камеру на QR-код Пельмени VPN");
+        scanner.setBeepEnabled(false);
+        scanner.setBarcodeImageEnabled(false);
+        scanner.setOrientationLocked(false);
+        scanner.initiateScan();
+    }
+
+    private void importAccessCode(String raw) {
+        boolean reconnect = running;
+        if (reconnect) stopTunnel();
+        Toast.makeText(this, "Добавляю сервер…", Toast.LENGTH_SHORT).show();
+        speedWorker.execute(() -> {
+            try {
+                SecureStore store = new SecureStore(this);
+                boolean withTls = ServerAccessCode.requestsTls(raw);
+                ServerProfiles.Profile profile =
+                        ServerAccessCode.importCode(store, raw);
+                mainHandler.post(() -> {
+                    loadSettings();
+                    ensureSshHostKey(() -> {
+                        if (!withTls) {
+                            finishAccessCodeImport(profile, reconnect);
+                            return;
+                        }
+                        Toast.makeText(this, "Получаю TLS-сертификат…",
+                                Toast.LENGTH_SHORT).show();
+                        speedWorker.execute(() -> {
+                            try {
+                                ServerAccessCode.importTls(
+                                        new SecureStore(this), profile, raw);
+                                mainHandler.post(() ->
+                                        finishAccessCodeImport(profile, reconnect));
+                            } catch (Exception error) {
+                                mainHandler.post(() -> {
+                                    finishAccessCodeImport(profile, reconnect);
+                                    new AlertDialog.Builder(this)
+                                            .setTitle("Сервер добавлен, но TLS не получен")
+                                            .setMessage(safeMessage(error)
+                                                    + "\n\nПрофиль сохранён и может "
+                                                    + "подключаться напрямую по SSH.")
+                                            .setPositiveButton("Понятно", null)
+                                            .show();
+                                });
+                            }
+                        });
+                    });
+                });
+            } catch (Exception error) {
+                mainHandler.post(() -> {
+                    Toast.makeText(this, safeMessage(error),
+                            Toast.LENGTH_LONG).show();
+                    if (reconnect) toggle.postDelayed(this::startTunnel, 900);
+                });
+            }
+        });
+    }
+
+    private void finishAccessCodeImport(
+            ServerProfiles.Profile profile, boolean reconnect) {
+        loadSettings();
+        Toast.makeText(this, "Добавлен сервер «" + profile.name + "»",
+                Toast.LENGTH_LONG).show();
+        showHomePage();
+        if (reconnect) toggle.postDelayed(this::startTunnel, 900);
+    }
+
+    private void showExtendManagedUser(ServerAccessManager.ManagedUser managed) {
+        EditText days = new EditText(this);
+        days.setText("30");
+        days.setInputType(InputType.TYPE_CLASS_NUMBER);
+        new AlertDialog.Builder(this)
+                .setTitle("Продлить " + managed.label)
+                .setMessage("Количество дней. 0 — сделать доступ бессрочным.")
+                .setView(days)
+                .setPositiveButton("Применить", (dialog, which) -> {
+                    long value = nonNegative(days);
+                    if (value < 0 || value > 36500) {
+                        Toast.makeText(this, "Допустимо от 0 до 36500 дней",
+                                Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    runManagedOperation(() -> {
+                        SecureStore store = new SecureStore(this);
+                        ServerAccessManager.extend(
+                                store, peopleServer(store), managed.login, (int) value);
+                    }, "Срок обновлён");
+                })
+                .setNegativeButton("Отмена", null)
+                .show();
+    }
+
+    private void showEditManagedUserLimits(
+            ServerAccessManager.ManagedUser managed) {
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(20), dp(4), dp(20), 0);
+        EditText daily = addServerField(content, "Трафик в день · МБ",
+                Long.toString(managed.dailyMb), InputType.TYPE_CLASS_NUMBER);
+        EditText monthly = addServerField(content, "Трафик в месяц · МБ",
+                Long.toString(managed.monthlyMb), InputType.TYPE_CLASS_NUMBER);
+        EditText speed = addServerField(content, "Скорость · Мбит/с",
+                Long.toString(managed.speedMbps), InputType.TYPE_CLASS_NUMBER);
+        new AlertDialog.Builder(this)
+                .setTitle("Лимиты · " + managed.label)
+                .setView(content)
+                .setPositiveButton("Сохранить", (dialog, which) -> {
+                    long dayValue = nonNegative(daily);
+                    long monthValue = nonNegative(monthly);
+                    long speedValue = nonNegative(speed);
+                    if (dayValue < 0 || monthValue < 0 || speedValue < 0) {
+                        Toast.makeText(this, "Лимиты должны быть неотрицательными",
+                                Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    runManagedOperation(() -> {
+                        SecureStore store = new SecureStore(this);
+                        ServerAccessManager.updateLimits(
+                                store, peopleServer(store), managed.login,
+                                dayValue, monthValue, speedValue);
+                    }, "Лимиты применены");
+                })
+                .setNegativeButton("Отмена", null)
+                .show();
+    }
+
+    private void confirmResetManagedUserUsage(
+            ServerAccessManager.ManagedUser managed) {
+        new AlertDialog.Builder(this)
+                .setTitle("Обнулить трафик у " + managed.label + "?")
+                .setMessage("Дневной и месячный счётчики станут равны нулю.")
+                .setPositiveButton("Обнулить", (dialog, which) ->
+                        runManagedOperation(() -> {
+                            SecureStore store = new SecureStore(this);
+                            ServerAccessManager.resetUsage(
+                                    store, peopleServer(store), managed.login);
+                        }, "Трафик обнулён"))
+                .setNegativeButton("Отмена", null)
+                .show();
+    }
+
+    private void confirmRevokeManagedUser(
+            ServerAccessManager.ManagedUser managed) {
+        new AlertDialog.Builder(this)
+                .setTitle("Отозвать доступ у " + managed.label + "?")
+                .setMessage("Учётная запись будет удалена, старый код перестанет работать.")
+                .setPositiveButton("Отозвать", (dialog, which) ->
+                        runManagedOperation(() -> {
+                            SecureStore store = new SecureStore(this);
+                            ServerAccessManager.revoke(
+                                    store, peopleServer(store), managed.login);
+                        }, "Доступ отозван"))
+                .setNegativeButton("Отмена", null)
+                .show();
+    }
+
+    private interface ManagedOperation {
+        void run() throws Exception;
+    }
+
+    private void runManagedOperation(ManagedOperation operation, String success) {
+        speedWorker.execute(() -> {
+            try {
+                operation.run();
+                mainHandler.post(() -> {
+                    Toast.makeText(this, success, Toast.LENGTH_SHORT).show();
+                    showPeoplePage(null, null);
+                });
+            } catch (Exception error) {
+                mainHandler.post(() -> Toast.makeText(
+                        this, safeMessage(error), Toast.LENGTH_LONG).show());
+            }
+        });
+    }
+
     private void setSelectedNav(View selected) {
         tintNav(navHome, selected == navHome);
+        tintNav(navPeople, selected == navPeople);
         tintNav(navSettings, selected == navSettings);
         tintNav(navAdd, selected == navAdd);
     }
@@ -379,7 +1012,7 @@ public class MainActivity extends Activity {
         card.addView(view);
     }
 
-    private void addToggleCard(
+    private CheckBox addToggleCard(
             LinearLayout page, String title, String subtitle,
             boolean checked, ToggleChange onChange) {
         LinearLayout card = createCard();
@@ -393,6 +1026,7 @@ public class MainActivity extends Activity {
         addCardSubtitle(card, subtitle);
         toggle.setOnCheckedChangeListener((button, value) -> onChange.onChange(value));
         page.addView(card, pageCardParams());
+        return toggle;
     }
 
     private RadioButton createRadio(String title, String subtitle) {
@@ -2059,7 +2693,13 @@ public class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == REQUEST_VPN && resultCode == RESULT_OK) {
+        IntentResult qrResult = IntentIntegrator.parseActivityResult(
+                requestCode, resultCode, data);
+        if (qrResult != null) {
+            if (qrResult.getContents() != null) {
+                importAccessCode(qrResult.getContents());
+            }
+        } else if (requestCode == REQUEST_VPN && resultCode == RESULT_OK) {
             startVpnTunnel();
         } else if (requestCode == REQUEST_EXPORT && resultCode == RESULT_OK && data != null) {
             writeConfig(data.getData());

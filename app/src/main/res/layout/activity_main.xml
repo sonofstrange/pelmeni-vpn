@@ -187,7 +187,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="5dp"
-                    android:text="Выбери, какие сайты должны идти через VPN, а какие — напрямую."
+                    android:text="Выбери приложения и сайты, которые идут через VPN или напрямую."
                     android:textColor="@color/amnezia_muted"
                     android:textSize="13sp" />
 
@@ -235,7 +235,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="14dp"
-                    android:text="НАСТРОИТЬ МАРШРУТЫ" />
+                    android:text="НАСТРОИТЬ ТУННЕЛИРОВАНИЕ" />
 
                 <TextView
                     android:id="@+id/splitTunnelSummary"

@@ -35,6 +35,9 @@ public class VpnTunnelService extends VpnService {
     private static final String EXTRA_SPLIT_MODE = "split_mode";
     private static final String EXTRA_SPLIT_NAME = "split_name";
     private static final String EXTRA_SPLIT_ENTRIES = "split_entries";
+    private static final String EXTRA_APP_SPLIT_ENABLED = "app_split_enabled";
+    private static final String EXTRA_APP_SPLIT_MODE = "app_split_mode";
+    private static final String EXTRA_APP_SPLIT_PACKAGES = "app_split_packages";
     private static final String EXTRA_UNDERLYING_NETWORK = "underlying_network";
     private static final String EXTRA_UNDERLYING_AVAILABLE =
             "underlying_network_available";
@@ -76,8 +79,13 @@ public class VpnTunnelService extends VpnService {
     public static Intent includeRoutingSnapshot(Intent intent, SecureStore store) {
         boolean enabled = SplitTunnel.enabled(store);
         SplitTunnel.Profile profile = SplitTunnel.combined(store);
+        AppSplitTunnel.Config appConfig = AppSplitTunnel.load(store);
         intent.putExtra(EXTRA_SPLIT_SNAPSHOT, true)
-                .putExtra(EXTRA_SPLIT_ENABLED, enabled);
+                .putExtra(EXTRA_SPLIT_ENABLED, enabled)
+                .putExtra(EXTRA_APP_SPLIT_ENABLED, appConfig.enabled)
+                .putExtra(EXTRA_APP_SPLIT_MODE, appConfig.mode)
+                .putStringArrayListExtra(EXTRA_APP_SPLIT_PACKAGES,
+                        new ArrayList<>(appConfig.packages));
         if (profile != null) {
             intent.putExtra(EXTRA_SPLIT_MODE, profile.mode)
                     .putExtra(EXTRA_SPLIT_NAME, profile.name)
@@ -120,8 +128,14 @@ public class VpnTunnelService extends VpnService {
         SplitTunnel.Profile profile = entries == null ? null : SplitTunnel.create(
                 intent.getStringExtra(EXTRA_SPLIT_NAME),
                 intent.getStringExtra(EXTRA_SPLIT_MODE), entries);
+        ArrayList<String> appPackages =
+                intent.getStringArrayListExtra(EXTRA_APP_SPLIT_PACKAGES);
         return new RoutingSnapshot(
-                intent.getBooleanExtra(EXTRA_SPLIT_ENABLED, false), profile);
+                intent.getBooleanExtra(EXTRA_SPLIT_ENABLED, false), profile,
+                new AppSplitTunnel.Config(
+                        intent.getBooleanExtra(EXTRA_APP_SPLIT_ENABLED, false),
+                        intent.getStringExtra(EXTRA_APP_SPLIT_MODE),
+                        appPackages == null ? new ArrayList<>() : appPackages));
     }
 
     private void reloadRoutes(RoutingSnapshot snapshot) {
@@ -178,6 +192,8 @@ public class VpnTunnelService extends VpnService {
             SplitTunnel.Routing routing = snapshot == null
                     ? SplitTunnel.resolve(store)
                     : SplitTunnel.resolve(snapshot.enabled, snapshot.profile);
+            AppSplitTunnel.Config appRouting = snapshot == null
+                    ? AppSplitTunnel.load(store) : snapshot.appConfig;
             VpnService.Builder builder = new VpnService.Builder()
                     .setSession(Branding.appName(this))
                     .setMtu(mtu)
@@ -191,10 +207,8 @@ public class VpnTunnelService extends VpnService {
                 builder.setUnderlyingNetworks(new Network[0]);
             }
             routing.apply(builder);
-            try {
-                builder.addDisallowedApplication(getPackageName());
-            } catch (Exception ignored) {
-            }
+            AppSplitTunnel.apply(
+                    builder, appRouting, getPackageManager(), getPackageName());
             tun = builder.establish();
             if (tun == null) {
                 send("Android не разрешил создать VPN");
@@ -332,10 +346,14 @@ public class VpnTunnelService extends VpnService {
     private static final class RoutingSnapshot {
         final boolean enabled;
         final SplitTunnel.Profile profile;
+        final AppSplitTunnel.Config appConfig;
 
-        RoutingSnapshot(boolean enabled, SplitTunnel.Profile profile) {
+        RoutingSnapshot(
+                boolean enabled, SplitTunnel.Profile profile,
+                AppSplitTunnel.Config appConfig) {
             this.enabled = enabled;
             this.profile = profile;
+            this.appConfig = appConfig;
         }
     }
 }

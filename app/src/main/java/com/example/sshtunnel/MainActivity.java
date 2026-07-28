@@ -22,7 +22,9 @@ import android.provider.Settings;
 import android.net.VpnService;
 import android.graphics.Bitmap;
 import android.graphics.drawable.Icon;
+import android.text.Editable;
 import android.text.InputType;
+import android.text.TextWatcher;
 import android.view.View;
 import android.widget.Button;
 import android.widget.CheckBox;
@@ -54,9 +56,12 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -266,6 +271,10 @@ public class MainActivity extends Activity {
             toggle.post(() -> {
                 if (!running) startTunnel();
             });
+        }
+        if (BuildConfig.DEBUG
+                && getIntent().getBooleanExtra("open_app_split_test", false)) {
+            showAppSplitTunnelPage();
         }
         maybeCheckForUpdate(false);
     }
@@ -1199,9 +1208,23 @@ public class MainActivity extends Activity {
         List<SplitTunnel.Profile> selectedProfiles = SplitTunnel.selected(store);
         SplitTunnel.Profile active = SplitTunnel.combined(store);
         LinearLayout page = createPageContent("Раздельное туннелирование",
-                "Можно выбрать несколько наборов одного типа. Их адреса объединятся. "
+                "Выбери приложения и сайты, которые должны использовать VPN. "
+                        + "Правила приложений и адресов можно применять одновременно.");
+
+        addSectionTitle(page, "Приложения");
+        addPageAction(page, "Туннелирование приложений",
+                AppSplitTunnel.summary(AppSplitTunnel.load(store)),
+                this::showAppSplitTunnelPage);
+
+        addSectionTitle(page, "Сайты и IP-адреса");
+        TextView addressHelp = new TextView(this);
+        addressHelp.setText("Можно выбрать несколько наборов одного типа. Их адреса объединятся. "
                         + "Набор другого типа начинает новую комбинацию, потому что режимы "
                         + "«только через VPN» и «кроме VPN» нельзя смешивать.");
+        addressHelp.setTextColor(0xFF9297A2);
+        addressHelp.setTextSize(13);
+        addressHelp.setPadding(0, dp(4), 0, dp(2));
+        page.addView(addressHelp);
 
         addToggleCard(page, "Использовать раздельные маршруты",
                 "Если выключено, весь трафик работает как раньше и идёт через VPN.",
@@ -2470,6 +2493,161 @@ public class MainActivity extends Activity {
         freeParams.topMargin = dp(8);
         free.setOnClickListener(v -> showFreeServersPage(null, null));
         page.addView(free, freeParams);
+        showScrollablePage(page, navHome);
+    }
+
+    private void showAppSplitTunnelPage() {
+        SecureStore store = new SecureStore(this);
+        AppSplitTunnel.Config saved = AppSplitTunnel.load(store);
+        Set<String> selected = new LinkedHashSet<>(saved.packages);
+        boolean[] enabled = {saved.enabled};
+
+        LinearLayout page = createPageContent("Туннелирование приложений",
+                "Android направит трафик выбранных приложений напрямую или через VPN. "
+                        + "Изменение применяется при сохранении и не влияет на настройки сайтов.");
+
+        CheckBox enabledToggle = addToggleCard(page, "Использовать правила приложений",
+                "Если выключено, VPN доступен всем приложениям.",
+                saved.enabled, checked -> enabled[0] = checked);
+
+        addSectionTitle(page, "Режим");
+        LinearLayout modeCard = createCard();
+        RadioGroup modes = new RadioGroup(this);
+        modes.setOrientation(RadioGroup.VERTICAL);
+        RadioButton bypass = createRadio("VPN везде, кроме выбранных",
+                "Выбранные приложения выходят в интернет напрямую");
+        RadioButton only = createRadio("VPN только для выбранных",
+                "Остальные приложения выходят в интернет напрямую");
+        modes.addView(bypass);
+        modes.addView(only);
+        if (AppSplitTunnel.MODE_ONLY.equals(saved.mode)) only.setChecked(true);
+        else bypass.setChecked(true);
+        modeCard.addView(modes);
+        page.addView(modeCard, pageCardParams());
+
+        addSectionTitle(page, "Выбор приложений");
+        EditText search = addServerField(page, "Поиск по названию или пакету", "",
+                InputType.TYPE_CLASS_TEXT);
+
+        LinearLayout appList = new LinearLayout(this);
+        appList.setOrientation(LinearLayout.VERTICAL);
+        Map<View, String> searchableRows = new LinkedHashMap<>();
+        android.content.pm.PackageManager packageManager = getPackageManager();
+        Intent launcherIntent = new Intent(Intent.ACTION_MAIN)
+                .addCategory(Intent.CATEGORY_LAUNCHER);
+        List<android.content.pm.ResolveInfo> launchers =
+                packageManager.queryIntentActivities(launcherIntent, 0);
+        Map<String, android.content.pm.ResolveInfo> uniqueApps = new LinkedHashMap<>();
+        for (android.content.pm.ResolveInfo info : launchers) {
+            String packageName = info.activityInfo.packageName;
+            if (!getPackageName().equals(packageName)) {
+                uniqueApps.put(packageName, info);
+            }
+        }
+        List<android.content.pm.ResolveInfo> apps =
+                new ArrayList<>(uniqueApps.values());
+        apps.sort((left, right) -> String.CASE_INSENSITIVE_ORDER.compare(
+                left.loadLabel(packageManager).toString(),
+                right.loadLabel(packageManager).toString()));
+
+        for (android.content.pm.ResolveInfo info : apps) {
+            String packageName = info.activityInfo.packageName;
+            String label = info.loadLabel(packageManager).toString();
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(android.view.Gravity.CENTER_VERTICAL);
+            row.setPadding(dp(10), dp(8), dp(8), dp(8));
+            row.setBackgroundResource(R.drawable.settings_action_background);
+
+            ImageView icon = new ImageView(this);
+            icon.setImageDrawable(info.loadIcon(packageManager));
+            row.addView(icon, new LinearLayout.LayoutParams(dp(42), dp(42)));
+
+            LinearLayout labels = new LinearLayout(this);
+            labels.setOrientation(LinearLayout.VERTICAL);
+            labels.setPadding(dp(12), 0, dp(8), 0);
+            TextView title = new TextView(this);
+            title.setText(label);
+            title.setTextColor(0xFFF1F2F4);
+            title.setTextSize(16);
+            title.setSingleLine(true);
+            labels.addView(title);
+            TextView packageView = new TextView(this);
+            packageView.setText(packageName);
+            packageView.setTextColor(0xFF858A94);
+            packageView.setTextSize(11);
+            packageView.setSingleLine(true);
+            labels.addView(packageView);
+            row.addView(labels, new LinearLayout.LayoutParams(
+                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+
+            CheckBox checked = new CheckBox(this);
+            checked.setChecked(selected.contains(packageName));
+            checked.setOnCheckedChangeListener((button, value) -> {
+                if (value) selected.add(packageName);
+                else selected.remove(packageName);
+            });
+            row.addView(checked);
+            row.setOnClickListener(v -> checked.setChecked(!checked.isChecked()));
+
+            LinearLayout.LayoutParams rowParams = pageCardParams();
+            rowParams.topMargin = dp(6);
+            appList.addView(row, rowParams);
+            searchableRows.put(row,
+                    (label + " " + packageName).toLowerCase(Locale.ROOT));
+        }
+        if (apps.isEmpty()) {
+            TextView empty = new TextView(this);
+            empty.setText("Не удалось получить список запускаемых приложений.");
+            empty.setTextColor(0xFF9297A2);
+            empty.setTextSize(14);
+            empty.setPadding(0, dp(16), 0, dp(16));
+            appList.addView(empty);
+        }
+        page.addView(appList);
+
+        search.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(
+                    CharSequence text, int start, int count, int after) {
+            }
+
+            @Override public void onTextChanged(
+                    CharSequence text, int start, int before, int count) {
+                String query = text.toString().trim().toLowerCase(Locale.ROOT);
+                for (Map.Entry<View, String> entry : searchableRows.entrySet()) {
+                    entry.getKey().setVisibility(
+                            query.isEmpty() || entry.getValue().contains(query)
+                                    ? View.VISIBLE : View.GONE);
+                }
+            }
+
+            @Override public void afterTextChanged(Editable text) {
+            }
+        });
+
+        Button saveApps = new Button(this);
+        saveApps.setText("СОХРАНИТЬ");
+        LinearLayout.LayoutParams saveParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(58));
+        saveParams.topMargin = dp(22);
+        page.addView(saveApps, saveParams);
+        saveApps.setOnClickListener(v -> {
+            String mode = modes.getCheckedRadioButtonId() == only.getId()
+                    ? AppSplitTunnel.MODE_ONLY : AppSplitTunnel.MODE_BYPASS;
+            if (enabledToggle.isChecked()
+                    && AppSplitTunnel.MODE_ONLY.equals(mode)
+                    && selected.isEmpty()) {
+                Toast.makeText(this, "Выбери хотя бы одно приложение",
+                        Toast.LENGTH_LONG).show();
+                return;
+            }
+            AppSplitTunnel.save(store, new AppSplitTunnel.Config(
+                    enabledToggle.isChecked(), mode, new ArrayList<>(selected)));
+            applySplitTunnelChanges();
+            showSplitTunnelPage();
+            Toast.makeText(this, "Правила приложений сохранены",
+                    Toast.LENGTH_SHORT).show();
+        });
         showScrollablePage(page, navHome);
     }
 

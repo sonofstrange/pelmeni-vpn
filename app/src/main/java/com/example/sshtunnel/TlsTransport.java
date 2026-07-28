@@ -33,42 +33,6 @@ final class TlsTransport {
                 && !store.getPlain("tls_host", "").isEmpty();
     }
 
-    static boolean isConfiguredForProfile(
-            SecureStore store, ServerProfiles.Profile profile) {
-        if (profile == null) return false;
-        ServerProfiles.Profile active = ServerProfiles.active(store);
-        if (active != null && active.id.equals(profile.id)) {
-            return isConfigured(store)
-                    && profile.host.equalsIgnoreCase(
-                    store.getPlain("tls_host", ""));
-        }
-        return store.getEncrypted(profileKey(profile.id, BUNDLE_KEY)) != null
-                && store.getEncrypted(profileKey(profile.id, PASSWORD_KEY)) != null
-                && profile.host.equalsIgnoreCase(store.getPlain(
-                profileKey(profile.id, "tls_host"), ""));
-    }
-
-    static int portForProfile(SecureStore store, ServerProfiles.Profile profile) {
-        ServerProfiles.Profile active = ServerProfiles.active(store);
-        String key = active != null && profile != null && active.id.equals(profile.id)
-                ? "tls_port" : profileKey(profile.id, "tls_port");
-        try {
-            int value = Integer.parseInt(store.getPlain(
-                    key, Integer.toString(DEFAULT_PORT)));
-            return value >= 1 && value <= 65535 ? value : DEFAULT_PORT;
-        } catch (Exception ignored) {
-            return DEFAULT_PORT;
-        }
-    }
-
-    static String portsForProfile(
-            SecureStore store, ServerProfiles.Profile profile) {
-        ServerProfiles.Profile active = ServerProfiles.active(store);
-        String key = active != null && profile != null && active.id.equals(profile.id)
-                ? "tls_ports" : profileKey(profile.id, "tls_ports");
-        return store.getPlain(key, Integer.toString(portForProfile(store, profile)));
-    }
-
     static boolean isEnabledFor(SecureStore store, String host) {
         return store.getBoolean("tls_enabled", false)
                 && isConfigured(store)
@@ -208,6 +172,12 @@ final class TlsTransport {
 
     static SocketFactory socketFactory(
             SecureStore store, Network network) throws Exception {
+        return socketFactory(store, network,
+                NetworkTuning.DEFAULT_WINDOW_KIB * 1024);
+    }
+
+    static SocketFactory socketFactory(
+            SecureStore store, Network network, int sshWindowBytes) throws Exception {
         byte[] bundle = store.getEncrypted(BUNDLE_KEY);
         byte[] passwordBytes = store.getEncrypted(PASSWORD_KEY);
         if (bundle == null || passwordBytes == null) {
@@ -244,7 +214,8 @@ final class TlsTransport {
         trust.init(trustStore);
         SSLContext context = SSLContext.getInstance("TLS");
         context.init(keys.getKeyManagers(), trust.getTrustManagers(), null);
-        return new TlsSocketFactory(store, network, context, ports(store));
+        return new TlsSocketFactory(store, network, context, ports(store),
+                NetworkTuning.socketBufferBytes(sshWindowBytes));
     }
 
     private static int[] ports(SecureStore store) {
@@ -283,13 +254,16 @@ final class TlsTransport {
         private final Network network;
         private final SSLContext context;
         private final int[] tlsPorts;
+        private final int socketBufferBytes;
 
         TlsSocketFactory(
-                SecureStore store, Network network, SSLContext context, int[] tlsPorts) {
+                SecureStore store, Network network, SSLContext context, int[] tlsPorts,
+                int socketBufferBytes) {
             this.store = store;
             this.network = network;
             this.context = context;
             this.tlsPorts = tlsPorts;
+            this.socketBufferBytes = socketBufferBytes;
         }
 
         @Override public Socket createSocket(String host, int ignoredSshPort)
@@ -317,6 +291,8 @@ final class TlsTransport {
             try {
                 raw.setTcpNoDelay(true);
                 raw.setKeepAlive(true);
+                raw.setReceiveBufferSize(socketBufferBytes);
+                raw.setSendBufferSize(socketBufferBytes);
                 raw.setSoTimeout(15_000);
                 InetSocketAddress address = network == null
                         ? new InetSocketAddress(host, tlsPort)
@@ -326,6 +302,8 @@ final class TlsTransport {
                 SSLSocket tls = (SSLSocket) context.getSocketFactory()
                         .createSocket(raw, host, tlsPort, true);
                 tls.setUseClientMode(true);
+                tls.setReceiveBufferSize(socketBufferBytes);
+                tls.setSendBufferSize(socketBufferBytes);
                 List<String> protocols = new ArrayList<>();
                 List<String> supported = Arrays.asList(tls.getSupportedProtocols());
                 if (supported.contains("TLSv1.3")) protocols.add("TLSv1.3");

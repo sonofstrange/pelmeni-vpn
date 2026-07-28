@@ -1,9 +1,12 @@
 package com.example.sshtunnel;
 
 final class NetworkTuning {
-    static final int DEFAULT_WINDOW_KIB = 1024;
+    static final int LEGACY_WINDOW_KIB = 1024;
+    static final int DEFAULT_WINDOW_KIB = 4096;
     static final int DEFAULT_PACKET_KIB = 32;
     static final int DEFAULT_MTU = 8500;
+    static final int HIGH_LATENCY_WINDOW_KIB = 8192;
+    static final int STREAM_BUFFER_BYTES = 128 * 1024;
 
     static final int MIN_WINDOW_KIB = 128;
     static final int MAX_WINDOW_KIB = 16384;
@@ -28,6 +31,10 @@ final class NetworkTuning {
 
     static boolean valid(int value, int min, int max) {
         return value >= min && value <= max;
+    }
+
+    static int socketBufferBytes(int sshWindowBytes) {
+        return Math.max(512 * 1024, Math.min(8 * 1024 * 1024, sshWindowBytes));
     }
 
     private static int read(SecureStore store, String key, int fallback, int min, int max) {

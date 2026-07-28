@@ -9,12 +9,14 @@ local.properties
 .externalNativeBuild/
 .cxx/
 captures/
+/tmp/
 
 # Packaged binaries and signing material
 *.apk
 *.aab
 *.jks
 *.keystore
+/PelmeniVPN-logo-*.png
 
 # OS metadata
 .DS_Store

@@ -1,15 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_activated="true" android:state_pressed="true">
+        <shape android:shape="oval">
+            <solid android:color="#402102" />
+            <stroke android:width="4dp" android:color="#84603D" />
+        </shape>
+    </item>
     <item android:state_activated="true">
         <shape android:shape="oval">
-            <solid android:color="#2A2018" />
-            <stroke android:width="4dp" android:color="#FFAA5B" />
+            <solid android:color="@color/amnezia_midnight" />
+            <stroke android:width="4dp" android:color="@color/amnezia_accent" />
+        </shape>
+    </item>
+    <item android:state_pressed="true">
+        <shape android:shape="oval">
+            <solid android:color="@color/amnezia_onyx" />
+            <stroke android:width="3dp" android:color="@color/amnezia_muted" />
         </shape>
     </item>
     <item>
         <shape android:shape="oval">
-            <solid android:color="#17181C" />
-            <stroke android:width="3dp" android:color="#656872" />
+            <solid android:color="@color/amnezia_midnight" />
+            <stroke android:width="3dp" android:color="@color/amnezia_pale" />
         </shape>
     </item>
 </selector>

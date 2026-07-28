@@ -8,9 +8,7 @@ import android.content.ComponentName;
 import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
 import android.content.ClipData;
-import android.content.ClipboardManager;
 import android.content.Context;
-import android.content.res.ColorStateList;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.net.Uri;
@@ -18,9 +16,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.provider.Settings;
 import android.net.VpnService;
-import android.graphics.Bitmap;
 import android.graphics.drawable.Icon;
 import android.text.InputType;
 import android.view.View;
@@ -30,7 +26,6 @@ import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.ProgressBar;
 import android.widget.RadioButton;
 import android.widget.RadioGroup;
 import android.widget.ScrollView;
@@ -39,24 +34,14 @@ import android.widget.Toast;
 
 import org.json.JSONObject;
 
-import com.google.zxing.BarcodeFormat;
-import com.google.zxing.EncodeHintType;
-import com.google.zxing.common.BitMatrix;
-import com.google.zxing.integration.android.IntentIntegrator;
-import com.google.zxing.integration.android.IntentResult;
-import com.google.zxing.qrcode.QRCodeWriter;
-import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel;
-
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.EnumMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -68,56 +53,48 @@ public class MainActivity extends Activity {
     private static final int REQUEST_SPLIT_EXPORT = 22;
     private static final int REQUEST_SPLIT_IMPORT = 23;
     private static final long UPDATE_INTERVAL_MS = 24 * 60 * 60 * 1000L;
+    private static final int UI_ACCENT = 0xFFFBB26A;
+    private static final int UI_PALE = 0xFFD7D8DB;
+    private static final int UI_MUTED = 0xFF878B91;
+    private static final int UI_CHARCOAL = 0xFF494B50;
+    private static final int UI_SLATE = 0xFF2C2D30;
 
     private EditText host, sshPort, user, password, socksPort;
-    private TextView appTitle, status, speedPing, debugInfo, serverName, serverAddress;
-    private TextView userLimitSummary;
+    private TextView appTitle, appSubtitle, status, speedPing, serverName, serverAddress;
+    private TextView debugInfo;
     private TextView splitTunnelSummary;
     private TextView sessionDown, sessionUp, totalDown, totalUp;
-    private View userTrafficLimitPanel, userDailyLimitGroup, userMonthlyLimitGroup;
-    private TextView userDailyLimitLabel, userMonthlyLimitLabel;
-    private ProgressBar userDailyLimitProgress, userMonthlyLimitProgress;
-    private Button toggle, toggleTelegram, toggleVpn;
-    private ConnectionRingView ringTelegram, ringVpn;
-    private Button save, serverSelect, serverEdit, splitTunnelButton;
+    private Button toggle, save, serverSelect, serverEdit, splitTunnelButton;
+    private ConnectButtonDrawable connectButtonDrawable;
     private CheckBox showPassword, autoReconnect, startOnBoot, enableVpn, enableTelegram;
     private ScrollView mainScroll;
     private FrameLayout contentContainer;
-    private View navHome, navPeople, navSettings, navAdd;
+    private View navHome, navSettings, navAdd;
+    private View debugPanel;
     private View activePage;
-    private View splitRouteProgress;
-    private String peopleServerId;
     private boolean running;
-    private boolean proxyConnecting;
-    private boolean vpnConnecting;
-    private boolean waitingForVpnReady;
-    private boolean routingApplying;
     private boolean receiverRegistered;
-    private boolean suppressModeChanges;
-    private boolean pendingLiveVpnPermission;
     private volatile boolean speedTestRunning;
     private volatile boolean serverSetupRunning;
     private volatile boolean updateCheckRunning;
+    private volatile boolean hostKeyCheckRunning;
     private final ExecutorService speedWorker = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     private final BroadcastReceiver receiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
-            if (intent.hasExtra("speed_bps")) updateStats(intent);
-            String limitWarning = intent.getStringExtra("limit_warning");
-            if (limitWarning != null) {
-                new AlertDialog.Builder(MainActivity.this)
-                        .setTitle("Лимит доступа")
-                        .setMessage(limitWarning)
-                        .setPositiveButton("Понятно", null)
-                        .show();
+            if (Branding.ACTION_CHANGED.equals(intent.getAction())) {
+                applyBranding();
+                return;
             }
+            if (intent.hasExtra("speed_bps")) updateStats(intent);
             update(intent.getStringExtra("status"));
         }
     };
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        Branding.restoreLauncherState(this);
         setContentView(R.layout.activity_main);
 
         host = findViewById(R.id.host);
@@ -126,30 +103,21 @@ public class MainActivity extends Activity {
         password = findViewById(R.id.password);
         socksPort = findViewById(R.id.socksPort);
         appTitle = findViewById(R.id.appTitle);
+        appSubtitle = findViewById(R.id.appSubtitle);
+        debugPanel = findViewById(R.id.debugPanel);
+        debugInfo = findViewById(R.id.debugInfo);
         status = findViewById(R.id.status);
         speedPing = findViewById(R.id.speedPing);
-        userLimitSummary = findViewById(R.id.userLimitSummary);
-        debugInfo = findViewById(R.id.debugInfo);
         sessionDown = findViewById(R.id.sessionDown);
         sessionUp = findViewById(R.id.sessionUp);
         totalDown = findViewById(R.id.totalDown);
         totalUp = findViewById(R.id.totalUp);
-        userTrafficLimitPanel = findViewById(R.id.userTrafficLimitPanel);
-        userDailyLimitGroup = findViewById(R.id.userDailyLimitGroup);
-        userMonthlyLimitGroup = findViewById(R.id.userMonthlyLimitGroup);
-        userDailyLimitLabel = findViewById(R.id.userDailyLimitLabel);
-        userMonthlyLimitLabel = findViewById(R.id.userMonthlyLimitLabel);
-        userDailyLimitProgress = findViewById(R.id.userDailyLimitProgress);
-        userMonthlyLimitProgress = findViewById(R.id.userMonthlyLimitProgress);
         serverName = findViewById(R.id.serverName);
         serverAddress = findViewById(R.id.serverAddress);
         splitTunnelSummary = findViewById(R.id.splitTunnelSummary);
         toggle = findViewById(R.id.toggle);
-        toggleTelegram = findViewById(R.id.toggleTelegram);
-        toggleVpn = findViewById(R.id.toggleVpn);
-        ringTelegram = findViewById(R.id.ringTelegram);
-        ringVpn = findViewById(R.id.ringVpn);
-        splitRouteProgress = findViewById(R.id.splitRouteProgress);
+        connectButtonDrawable = new ConnectButtonDrawable(this);
+        toggle.setBackground(connectButtonDrawable);
         save = findViewById(R.id.save);
         serverSelect = findViewById(R.id.serverSelect);
         serverEdit = findViewById(R.id.serverEdit);
@@ -162,22 +130,18 @@ public class MainActivity extends Activity {
         mainScroll = findViewById(R.id.mainScroll);
         contentContainer = findViewById(R.id.contentContainer);
         navHome = findViewById(R.id.navHome);
-        navPeople = findViewById(R.id.navPeople);
         navSettings = findViewById(R.id.navSettings);
         navAdd = findViewById(R.id.navAdd);
 
-        ServerProfiles.migrateLegacy(new SecureStore(this));
-        SplitTunnel.ensureDefaults(new SecureStore(this));
-        Branding.restoreLauncherState(this);
-        appTitle.setText(Branding.appName(this));
-        updateDebugPanel();
+        SecureStore initialStore = new SecureStore(this);
+        ServerProfiles.migrateLegacy(initialStore);
+        ServerProfiles.migratePerformanceDefaults(initialStore);
+        SplitTunnel.ensureDefaults(initialStore);
+        applyBranding();
         loadSettings();
         running = new SecureStore(this).getBoolean("enabled", false)
                 && TunnelService.isActive();
-        update(!running ? "Отключено"
-                : TunnelService.isConnected()
-                ? "Подключено · " + TunnelMode.portsLabel(new SecureStore(this))
-                : "Подключение…");
+        update(running ? "Сервис запущен, проверяем соединение…" : "Отключено");
 
         showStoredTotals();
 
@@ -197,20 +161,10 @@ public class MainActivity extends Activity {
                 new SecureStore(this).putBoolean("auto_reconnect", checked));
         startOnBoot.setOnCheckedChangeListener((button, checked) ->
                 new SecureStore(this).putBoolean("start_on_boot", checked));
-        enableVpn.setOnCheckedChangeListener((button, checked) -> {
-            if (suppressModeChanges) return;
-            new SecureStore(this).putBoolean("vpn_mode", checked);
-            updateModeButtons();
-            applyLiveModeChange(true, checked);
-        });
-        enableTelegram.setOnCheckedChangeListener((button, checked) -> {
-            if (suppressModeChanges) return;
-            new SecureStore(this).putBoolean("telegram_proxy", checked);
-            updateModeButtons();
-            applyLiveModeChange(false, checked);
-        });
-        toggleTelegram.setOnClickListener(v -> toggleModeFromButton(false));
-        toggleVpn.setOnClickListener(v -> toggleModeFromButton(true));
+        enableVpn.setOnCheckedChangeListener((button, checked) ->
+                new SecureStore(this).putBoolean("vpn_mode", checked));
+        enableTelegram.setOnCheckedChangeListener((button, checked) ->
+                new SecureStore(this).putBoolean("telegram_proxy", checked));
 
         save.setOnClickListener(v -> {
             if (saveSettings()) {
@@ -226,15 +180,13 @@ public class MainActivity extends Activity {
         serverEdit.setOnClickListener(v -> {
             ServerProfiles.Profile active =
                     ServerProfiles.active(new SecureStore(this));
-            if (active == null) showAddServerChoice();
-            else showServerEditor(active);
+            showServerEditor(active);
         });
         findViewById(R.id.serverProfileCard).setOnClickListener(v -> showServerList());
         splitTunnelButton.setOnClickListener(v -> showSplitTunnelPage());
         navHome.setOnClickListener(v -> showHomePage());
-        navPeople.setOnClickListener(v -> showPeoplePage(null, null));
         navSettings.setOnClickListener(v -> showSettingsHub());
-        navAdd.setOnClickListener(v -> showAddServerChoice());
+        navAdd.setOnClickListener(v -> showServerEditor(null));
         setSelectedNav(navHome);
         if (getIntent().getBooleanExtra(EXTRA_START_FROM_TILE, false)) {
             getIntent().removeExtra(EXTRA_START_FROM_TILE);
@@ -253,653 +205,6 @@ public class MainActivity extends Activity {
         super.onBackPressed();
     }
 
-    private void showPeoplePage(
-            List<ServerAccessManager.ManagedUser> users, String loadError) {
-        SecureStore store = new SecureStore(this);
-        ServerProfiles.Profile active = peopleServer(store);
-        LinearLayout page = createPageContent("Люди",
-                active == null ? "Доступ к VPN" : "Пользователи сервера «" + active.name + "»");
-        addPageAction(page, "Ввести код доступа",
-                "Добавить готовый сервер, которым с тобой поделились",
-                this::showImportAccessCode);
-        if (active == null) {
-            addCardSubtitle(page,
-                    "Добавь профиль администратора с root/sudo, чтобы управлять пользователями.");
-            showScrollablePage(page, navPeople);
-            return;
-        }
-        List<ServerProfiles.Profile> adminServers = adminServers(store);
-        if (adminServers.size() > 1) {
-            addSectionTitle(page, "Сервер администратора");
-            LinearLayout selector = createCard();
-            RadioGroup choices = new RadioGroup(this);
-            for (ServerProfiles.Profile server : adminServers) {
-                RadioButton choice = createRadio(server.name,
-                        server.host + ":" + server.sshPort);
-                choice.setTag(server.id);
-                choice.setChecked(server.id.equals(active.id));
-                choices.addView(choice);
-            }
-            choices.setOnCheckedChangeListener((group, id) -> {
-                RadioButton selected = group.findViewById(id);
-                if (selected == null) return;
-                peopleServerId = String.valueOf(selected.getTag());
-                showPeoplePage(null, null);
-            });
-            selector.addView(choices);
-            page.addView(selector, pageCardParams());
-        }
-        addSectionTitle(page, "Управление сервером");
-        addPageAction(page, "Добавить человека",
-                "Отдельный логин, срок, лимиты трафика и скорости",
-                this::showCreateManagedUser);
-        if (users == null && loadError == null) {
-            LinearLayout loading = createCard();
-            addCardTitle(loading, "Загружаю пользователей…");
-            addCardSubtitle(loading,
-                    "При первом запуске сервер установит небольшой контроллер лимитов.");
-            page.addView(loading, pageCardParams());
-            showScrollablePage(page, navPeople);
-            loadManagedUsers();
-            return;
-        }
-        if (loadError != null) {
-            LinearLayout error = createCard();
-            addCardTitle(error, "Не удалось открыть список");
-            addCardSubtitle(error, loadError
-                    + "\n\nУправлять людьми можно только из профиля администратора с root/sudo.");
-            page.addView(error, pageCardParams());
-            addPageAction(page, "Повторить", "Снова подключиться к серверу",
-                    this::loadManagedUsers);
-            showScrollablePage(page, navPeople);
-            return;
-        }
-        addSectionTitle(page, "Пользователи · " + users.size());
-        if (users.isEmpty()) {
-            LinearLayout empty = createCard();
-            addCardTitle(empty, "Пока никого нет");
-            addCardSubtitle(empty,
-                    "Добавь человека и отправь ему секретный код. Админский пароль в код не попадёт.");
-            page.addView(empty, pageCardParams());
-        }
-        for (ServerAccessManager.ManagedUser managed : users) {
-            LinearLayout card = createCard();
-            addCardTitle(card, managed.label + "  ·  " + managed.login);
-            String expiry = managed.forever() ? "бессрочно" : "до " + managed.expires;
-            String daily = managed.dailyMb <= 0 ? "∞" : managed.dailyMb + " МБ/день";
-            String monthly = managed.monthlyMb <= 0 ? "∞" : managed.monthlyMb + " МБ/месяц";
-            String speed = managed.speedMbps <= 0 ? "без ограничения"
-                    : managed.speedMbps + " Мбит/с";
-            String state = managedUserState(managed);
-            String resets = (managed.dailyMb > 0
-                    ? "день " + limitResetCountdown(
-                    managed.issuedAt, false) : "")
-                    + (managed.dailyMb > 0 && managed.monthlyMb > 0 ? " · " : "")
-                    + (managed.monthlyMb > 0
-                    ? "месяц " + limitResetCountdown(
-                    managed.issuedAt, true) : "");
-            addCardSubtitle(card, state + " · " + expiry
-                    + "\nСегодня: " + formatBytes(managed.dayBytes)
-                    + (managed.dailyMb > 0 ? " / " + managed.dailyMb + " МБ" : "")
-                    + " · месяц: " + formatBytes(managed.monthBytes)
-                    + (managed.monthlyMb > 0 ? " / " + managed.monthlyMb + " МБ" : "")
-                    + "\nЛимиты: " + daily + " · " + monthly + " · " + speed
-                    + (resets.isEmpty() ? "" : "\nСброс: " + resets));
-            LinearLayout actions = new LinearLayout(this);
-            actions.setOrientation(LinearLayout.VERTICAL);
-            actions.setPadding(0, dp(8), 0, 0);
-            actions.setVisibility(View.GONE);
-            LinearLayout primary = createUserActionRow();
-            addUserAction(primary, "СТАТУС И ТРАФИК", false,
-                    () -> showManagedUserStatus(managed), false);
-            addUserAction(primary, "КОД И QR", false,
-                    () -> showAccessCode(managed), true);
-            actions.addView(primary);
-            LinearLayout secondary = createUserActionRow();
-            secondary.setPadding(0, dp(8), 0, 0);
-            addUserAction(secondary, "ПРОДЛИТЬ", false,
-                    () -> showExtendManagedUser(managed), false);
-            addUserAction(secondary, "ОТОЗВАТЬ", true,
-                    () -> confirmRevokeManagedUser(managed), true);
-            actions.addView(secondary);
-            LinearLayout limits = createUserActionRow();
-            limits.setPadding(0, dp(8), 0, 0);
-            addUserAction(limits, "ИЗМЕНИТЬ ЛИМИТЫ", false,
-                    () -> showEditManagedUserLimits(managed), false);
-            addUserAction(limits, "ОБНУЛИТЬ ТРАФИК", true,
-                    () -> confirmResetManagedUserUsage(managed), true);
-            actions.addView(limits);
-            TextView actionsToggle = new TextView(this);
-            actionsToggle.setText("УПРАВЛЕНИЕ  ▼");
-            actionsToggle.setTextColor(0xFFE8EAF0);
-            actionsToggle.setTextSize(13);
-            actionsToggle.setTypeface(null, android.graphics.Typeface.BOLD);
-            actionsToggle.setGravity(android.view.Gravity.CENTER);
-            actionsToggle.setBackgroundResource(R.drawable.settings_action_background);
-            actionsToggle.setClickable(true);
-            actionsToggle.setFocusable(true);
-            actionsToggle.setOnClickListener(v -> {
-                boolean open = actions.getVisibility() != View.VISIBLE;
-                actions.setVisibility(open ? View.VISIBLE : View.GONE);
-                actionsToggle.setText(open ? "УПРАВЛЕНИЕ  ▲" : "УПРАВЛЕНИЕ  ▼");
-            });
-            LinearLayout.LayoutParams toggleParams = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, dp(48));
-            toggleParams.topMargin = dp(10);
-            card.addView(actionsToggle, toggleParams);
-            card.addView(actions);
-            page.addView(card, pageCardParams());
-        }
-        addPageAction(page, "Обновить список", "Получить актуальные данные с сервера",
-                this::loadManagedUsers);
-        showScrollablePage(page, navPeople);
-    }
-
-    private LinearLayout createUserActionRow() {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        return row;
-    }
-
-    private void addUserAction(
-            LinearLayout row, String label, boolean danger,
-            Runnable action, boolean addLeftMargin) {
-        TextView button = new TextView(this);
-        button.setText(label);
-        button.setTextColor(danger ? 0xFFFF7272 : 0xFFE8EAF0);
-        button.setTextSize(13);
-        button.setTypeface(null, android.graphics.Typeface.BOLD);
-        button.setGravity(android.view.Gravity.CENTER);
-        button.setPadding(dp(8), dp(10), dp(8), dp(10));
-        button.setBackgroundResource(R.drawable.settings_action_background);
-        button.setClickable(true);
-        button.setFocusable(true);
-        button.setOnClickListener(v -> action.run());
-        LinearLayout.LayoutParams params =
-                new LinearLayout.LayoutParams(0, dp(52), 1);
-        if (addLeftMargin) params.leftMargin = dp(8);
-        row.addView(button, params);
-    }
-
-    private String managedUserState(ServerAccessManager.ManagedUser managed) {
-        if (managed.expired) return "ИСТЁК";
-        if (managed.blocked) return "ЛИМИТ ИСЧЕРПАН";
-        boolean hasLimits = managed.dailyMb > 0
-                || managed.monthlyMb > 0 || managed.speedMbps > 0;
-        if (hasLimits && !managed.policyHealthy) return "ОШИБКА ЛИМИТОВ";
-        return "АКТИВЕН";
-    }
-
-    private void showManagedUserStatus(ServerAccessManager.ManagedUser managed) {
-        String checked = managed.statusUpdatedAt <= 0 ? "нет данных"
-                : android.text.format.DateFormat.getDateFormat(this).format(
-                new java.util.Date(managed.statusUpdatedAt * 1000L))
-                + " " + android.text.format.DateFormat.getTimeFormat(this).format(
-                new java.util.Date(managed.statusUpdatedAt * 1000L));
-        String message = "Статус: " + managedUserState(managed)
-                + "\nЛогин: " + managed.login
-                + "\nДействует: " + (managed.forever() ? "бессрочно" : "до " + managed.expires)
-                + "\n\nСегодня: " + formatBytes(managed.dayBytes)
-                + (managed.dailyMb > 0 ? " из " + managed.dailyMb + " МБ" : "")
-                + "\nВ этом месяце: " + formatBytes(managed.monthBytes)
-                + (managed.monthlyMb > 0 ? " из " + managed.monthlyMb + " МБ" : "")
-                + (managed.dailyMb > 0 ? "\nДневной сброс "
-                + limitResetCountdown(managed.issuedAt, false) : "")
-                + (managed.monthlyMb > 0 ? "\nМесячный сброс "
-                + limitResetCountdown(managed.issuedAt, true) : "")
-                + "\nОграничение скорости: "
-                + (managed.speedMbps > 0 ? managed.speedMbps + " Мбит/с" : "нет")
-                + "\n\nКонтроллер: "
-                + (managed.policyHealthy ? "работает" : "ошибка")
-                + "\nПоследняя проверка: " + checked;
-        if (!managed.policyHealthy && !managed.policyError.isEmpty()) {
-            message += "\nОшибка: " + managed.policyError;
-        }
-        LinearLayout content = new LinearLayout(this);
-        content.setOrientation(LinearLayout.VERTICAL);
-        content.setPadding(dp(22), dp(4), dp(22), 0);
-        TextView details = new TextView(this);
-        details.setText(message);
-        details.setTextColor(0xFFE1E3E8);
-        details.setTextSize(14);
-        content.addView(details);
-        if (managed.dailyMb > 0) {
-            addLimitProgress(content, "Дневной трафик",
-                    managed.dayBytes, managed.dailyMb);
-        }
-        if (managed.monthlyMb > 0) {
-            addLimitProgress(content, "Месячный трафик",
-                    managed.monthBytes, managed.monthlyMb);
-        }
-        new AlertDialog.Builder(this)
-                .setTitle(managed.label)
-                .setView(content)
-                .setPositiveButton("Обновить", (dialog, which) -> loadManagedUsers())
-                .setNegativeButton("Закрыть", null)
-                .show();
-    }
-
-    private void addLimitProgress(
-            LinearLayout parent, String title, long usedBytes, long limitMb) {
-        double ratio = usedBytes / (limitMb * 1024.0 * 1024.0);
-        TextView label = new TextView(this);
-        label.setText(title + " · " + Math.min(100, (int) (ratio * 100)) + "%");
-        label.setTextColor(ratio >= 1 ? 0xFFFF7272
-                : ratio >= 0.75 ? 0xFFFFAA5B : 0xFFD7DAE0);
-        label.setTextSize(13);
-        label.setPadding(0, dp(16), 0, dp(5));
-        parent.addView(label);
-        ProgressBar bar = new ProgressBar(
-                this, null, android.R.attr.progressBarStyleHorizontal);
-        bar.setMax(1000);
-        bar.setProgress((int) Math.min(1000, ratio * 1000));
-        bar.setProgressTintList(ColorStateList.valueOf(
-                ratio >= 1 ? 0xFFFF7272 : ratio >= 0.75 ? 0xFFFFAA5B : 0xFF77C68A));
-        parent.addView(bar, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(10)));
-    }
-
-    private void loadManagedUsers() {
-        ServerProfiles.Profile server = peopleServer(new SecureStore(this));
-        speedWorker.execute(() -> {
-            try {
-                List<ServerAccessManager.ManagedUser> users =
-                        ServerAccessManager.list(new SecureStore(this), server);
-                mainHandler.post(() -> showPeoplePage(users, null));
-            } catch (Exception error) {
-                mainHandler.post(() -> showPeoplePage(null,
-                        error.getMessage() == null ? "Неизвестная ошибка." : error.getMessage()));
-            }
-        });
-    }
-
-    private List<ServerProfiles.Profile> adminServers(SecureStore store) {
-        List<ServerProfiles.Profile> result = new java.util.ArrayList<>();
-        for (ServerProfiles.Profile profile : ServerProfiles.list(store)) {
-            if (!profile.user.startsWith("pel_")
-                    && !ServerProfiles.password(store, profile.id).isEmpty()) {
-                result.add(profile);
-            }
-        }
-        return result;
-    }
-
-    private ServerProfiles.Profile peopleServer(SecureStore store) {
-        List<ServerProfiles.Profile> servers = adminServers(store);
-        for (ServerProfiles.Profile profile : servers) {
-            if (profile.id.equals(peopleServerId)) return profile;
-        }
-        ServerProfiles.Profile active = ServerProfiles.active(store);
-        for (ServerProfiles.Profile profile : servers) {
-            if (active != null && profile.id.equals(active.id)) {
-                peopleServerId = profile.id;
-                return profile;
-            }
-        }
-        if (servers.isEmpty()) return null;
-        peopleServerId = servers.get(0).id;
-        return servers.get(0);
-    }
-
-    private void showAddServerChoice() {
-        LinearLayout page = createPageContent("Добавить сервер",
-                "Выбери, как ты хочешь подключиться.");
-        addPageAction(page, "Настроить свой сервер",
-                "Ввести IP, SSH-пользователя, пароль и параметры сервера",
-                () -> showServerEditor(null));
-        addPageAction(page, "Добавить по коду",
-                "Вставить текстовый код, который создал владелец VPN-сервера",
-                this::showImportAccessCode);
-        addPageAction(page, "Сканировать QR-код",
-                "Навести камеру на QR владельца VPN-сервера",
-                this::scanAccessQr);
-        showScrollablePage(page, navAdd);
-    }
-
-    private void scanAccessQr() {
-        IntentIntegrator scanner = new IntentIntegrator(this);
-        scanner.setDesiredBarcodeFormats(IntentIntegrator.QR_CODE);
-        scanner.setPrompt("Наведи камеру на QR-код Пельмени VPN");
-        scanner.setBeepEnabled(false);
-        scanner.setBarcodeImageEnabled(false);
-        scanner.setOrientationLocked(false);
-        scanner.initiateScan();
-    }
-
-    private void showImportAccessCode() {
-        EditText input = new EditText(this);
-        input.setHint("PEL1-…");
-        input.setMinLines(4);
-        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
-        FrameLayout wrapper = new FrameLayout(this);
-        wrapper.setPadding(dp(20), 0, dp(20), 0);
-        wrapper.addView(input);
-        new AlertDialog.Builder(this)
-                .setTitle("Код доступа")
-                .setMessage("Вставь код от владельца сервера. Он добавится как отдельный профиль.")
-                .setView(wrapper)
-                .setPositiveButton("Добавить", (dialog, which) ->
-                        importAccessCode(input.getText().toString()))
-                .setNegativeButton("Отмена", null)
-                .show();
-    }
-
-    private void importAccessCode(String code) {
-        boolean reconnect = running;
-        if (reconnect) stopTunnel();
-        Toast.makeText(this, "Добавляю сервер и получаю настройки…",
-                Toast.LENGTH_SHORT).show();
-        speedWorker.execute(() -> {
-            try {
-                ServerProfiles.Profile profile = ServerAccessCode.importCode(
-                        new SecureStore(this), code);
-                mainHandler.post(() -> {
-                    loadSettings();
-                    Toast.makeText(this, "Добавлен сервер «" + profile.name + "»",
-                            Toast.LENGTH_LONG).show();
-                    showHomePage();
-                    if (reconnect) toggle.postDelayed(this::startTunnel, 900);
-                });
-            } catch (Exception error) {
-                mainHandler.post(() -> {
-                    Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show();
-                    if (reconnect) toggle.postDelayed(this::startTunnel, 900);
-                });
-            }
-        });
-    }
-
-    private void showCreateManagedUser() {
-        LinearLayout page = createPageContent("Новый пользователь",
-                "У него будет отдельный SSH-доступ без пароля администратора.");
-        EditText label = addServerField(page, "Имя человека", "",
-                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
-        EditText login = addServerField(page, "Логин · латиницей", "",
-                InputType.TYPE_CLASS_TEXT);
-        addSectionTitle(page, "Срок действия");
-        EditText duration = addServerField(page, "Количество дней · 0 навсегда", "0",
-                InputType.TYPE_CLASS_NUMBER);
-        addQuickChoices(page, duration, "0", "1", "7", "30", "365");
-        addSectionTitle(page, "Лимиты · 0 означает без ограничений");
-        EditText daily = addServerField(page, "Трафик в день · МБ", "0",
-                InputType.TYPE_CLASS_NUMBER);
-        addQuickChoices(page, daily, "0", "1024", "5120", "10240");
-        EditText monthly = addServerField(page, "Трафик в месяц · МБ", "0",
-                InputType.TYPE_CLASS_NUMBER);
-        addQuickChoices(page, monthly, "0", "10240", "51200", "102400");
-        EditText speed = addServerField(page, "Скорость · Мбит/с", "0",
-                InputType.TYPE_CLASS_NUMBER);
-        addQuickChoices(page, speed, "0", "5", "10", "25");
-        SecureStore store = new SecureStore(this);
-        ServerProfiles.Profile selectedServer = peopleServer(store);
-        boolean tlsAvailable = TlsTransport.isConfiguredForProfile(
-                store, selectedServer);
-        addSectionTitle(page, "Защита подключения");
-        CheckBox useTls = addToggleCard(page, "Использовать TLS",
-                tlsAvailable
-                        ? "Сертификат установится вместе с кодом доступа. Пользователь сможет отключить TLS позже."
-                        : "На выбранном сервере TLS не настроен. Сначала включи его в настройках сервера.",
-                tlsAvailable, checked -> {
-                });
-        useTls.setEnabled(tlsAvailable);
-        Button create = new Button(this);
-        create.setText("СОЗДАТЬ И ПОЛУЧИТЬ КОД");
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(58));
-        params.topMargin = dp(22);
-        page.addView(create, params);
-        create.setOnClickListener(v -> {
-            String displayName = label.getText().toString().trim();
-            if (displayName.isEmpty()) displayName = login.getText().toString().trim();
-            long daysValue = parseLongOrNegative(duration);
-            long dailyValue = parseLongOrNegative(daily);
-            long monthlyValue = parseLongOrNegative(monthly);
-            long speedValue = parseLongOrNegative(speed);
-            if (displayName.isEmpty() || daysValue < 0 || daysValue > 36500
-                    || dailyValue < 0 || monthlyValue < 0 || speedValue < 0) {
-                Toast.makeText(this, "Проверь имя, срок и числовые лимиты", Toast.LENGTH_LONG).show();
-                return;
-            }
-            String finalDisplayName = displayName;
-            String finalLogin = login.getText().toString();
-            create.setEnabled(false);
-            create.setText("НАСТРАИВАЮ СЕРВЕР…");
-            speedWorker.execute(() -> {
-                try {
-                    ServerAccessManager.ManagedUser managed = ServerAccessManager.create(
-                            new SecureStore(this), peopleServer(new SecureStore(this)),
-                            finalDisplayName, finalLogin, (int) daysValue,
-                            dailyValue, monthlyValue, speedValue,
-                            useTls.isChecked());
-                    mainHandler.post(() -> {
-                        showAccessCode(managed);
-                        showPeoplePage(null, null);
-                    });
-                } catch (Exception error) {
-                    mainHandler.post(() -> {
-                        create.setEnabled(true);
-                        create.setText("СОЗДАТЬ И ПОЛУЧИТЬ КОД");
-                        Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show();
-                    });
-                }
-            });
-        });
-        showScrollablePage(page, navPeople);
-    }
-
-    private long parseLongOrNegative(EditText field) {
-        try {
-            return Long.parseLong(field.getText().toString().trim());
-        } catch (Exception error) {
-            return -1;
-        }
-    }
-
-    private void showAccessCode(ServerAccessManager.ManagedUser managed) {
-        try {
-            String code = managed.accessCode;
-            if (code == null || code.isEmpty()) {
-                throw new Exception("Сервер не вернул код доступа.");
-            }
-            LinearLayout content = new LinearLayout(this);
-            content.setOrientation(LinearLayout.VERTICAL);
-            content.setPadding(dp(20), dp(8), dp(20), 0);
-            ImageView qr = new ImageView(this);
-            qr.setImageBitmap(createQrBitmap(code, 900));
-            qr.setContentDescription("QR-код доступа для " + managed.label);
-            qr.setAdjustViewBounds(true);
-            content.addView(qr, new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, dp(320)));
-            TextView warning = new TextView(this);
-            warning.setText("Отсканируй QR через «Добавить сервер». QR содержит пароль пользователя — показывай его только тому, кому доверяешь.");
-            warning.setTextColor(0xFF9297A2);
-            warning.setTextSize(13);
-            warning.setPadding(0, dp(10), 0, 0);
-            content.addView(warning);
-            new AlertDialog.Builder(this)
-                    .setTitle("Код для " + managed.label)
-                    .setView(content)
-                    .setPositiveButton("Копировать", (dialog, which) -> {
-                        ClipboardManager clipboard =
-                                (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-                        clipboard.setPrimaryClip(ClipData.newPlainText(
-                                "Pelmeni VPN access", code));
-                        Toast.makeText(this, "Код скопирован", Toast.LENGTH_SHORT).show();
-                    })
-                    .setNeutralButton("Поделиться", (dialog, which) -> {
-                        Intent share = new Intent(Intent.ACTION_SEND);
-                        share.setType("text/plain");
-                        share.putExtra(Intent.EXTRA_TEXT, code);
-                        startActivity(Intent.createChooser(share, "Отправить код доступа"));
-                    })
-                    .setNegativeButton("Закрыть", null)
-                    .show();
-        } catch (Exception error) {
-            Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show();
-        }
-    }
-
-    private Bitmap createQrBitmap(String value, int size) throws Exception {
-        Map<EncodeHintType, Object> hints = new EnumMap<>(EncodeHintType.class);
-        hints.put(EncodeHintType.CHARACTER_SET, "UTF-8");
-        hints.put(EncodeHintType.ERROR_CORRECTION, ErrorCorrectionLevel.M);
-        hints.put(EncodeHintType.MARGIN, 2);
-        BitMatrix matrix = new QRCodeWriter().encode(
-                value, BarcodeFormat.QR_CODE, size, size, hints);
-        int[] pixels = new int[size * size];
-        for (int y = 0; y < size; y++) {
-            int offset = y * size;
-            for (int x = 0; x < size; x++) {
-                pixels[offset + x] = matrix.get(x, y) ? 0xFF000000 : 0xFFFFFFFF;
-            }
-        }
-        Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
-        bitmap.setPixels(pixels, 0, size, 0, 0, size, size);
-        return bitmap;
-    }
-
-    private void showExtendManagedUser(ServerAccessManager.ManagedUser managed) {
-        EditText days = new EditText(this);
-        days.setHint("Количество дней");
-        days.setText("30");
-        days.setInputType(InputType.TYPE_CLASS_NUMBER);
-        FrameLayout wrapper = new FrameLayout(this);
-        wrapper.setPadding(dp(20), 0, dp(20), 0);
-        wrapper.addView(days);
-        new AlertDialog.Builder(this)
-                .setTitle("Продлить " + managed.label)
-                .setMessage("Укажи любое количество дней. Они прибавятся к текущему сроку. 0 — сделать доступ бессрочным.")
-                .setView(wrapper)
-                .setPositiveButton("Применить", (dialog, which) -> {
-                    long value = parseLongOrNegative(days);
-                    if (value < 0 || value > 36500) {
-                        Toast.makeText(this, "Допустимо от 0 до 36500 дней",
-                                Toast.LENGTH_LONG).show();
-                        return;
-                    }
-                    runExtendManagedUser(managed, (int) value);
-                })
-                .setNegativeButton("Отмена", null)
-                .show();
-    }
-
-    private void showEditManagedUserLimits(
-            ServerAccessManager.ManagedUser managed) {
-        LinearLayout content = new LinearLayout(this);
-        content.setOrientation(LinearLayout.VERTICAL);
-        content.setPadding(dp(20), dp(4), dp(20), 0);
-        EditText daily = addServerField(content, "Трафик в день · МБ",
-                Long.toString(managed.dailyMb), InputType.TYPE_CLASS_NUMBER);
-        EditText monthly = addServerField(content, "Трафик в месяц · МБ",
-                Long.toString(managed.monthlyMb), InputType.TYPE_CLASS_NUMBER);
-        EditText speed = addServerField(content, "Скорость · Мбит/с",
-                Long.toString(managed.speedMbps), InputType.TYPE_CLASS_NUMBER);
-        TextView note = new TextView(this);
-        note.setText("0 означает отсутствие ограничения. Код доступа останется прежним: приложение пользователя получит новые лимиты с сервера автоматически.");
-        note.setTextColor(0xFF9297A2);
-        note.setTextSize(13);
-        content.addView(note);
-        AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle("Лимиты · " + managed.label)
-                .setView(content)
-                .setPositiveButton("Сохранить", null)
-                .setNegativeButton("Отмена", null)
-                .create();
-        dialog.setOnShowListener(ignored ->
-                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
-                    long dayValue = parseLongOrNegative(daily);
-                    long monthValue = parseLongOrNegative(monthly);
-                    long speedValue = parseLongOrNegative(speed);
-                    if (dayValue < 0 || monthValue < 0 || speedValue < 0) {
-                        Toast.makeText(this, "Лимиты должны быть целыми числами от 0",
-                                Toast.LENGTH_LONG).show();
-                        return;
-                    }
-                    dialog.dismiss();
-                    speedWorker.execute(() -> {
-                        try {
-                            SecureStore store = new SecureStore(this);
-                            ServerAccessManager.updateLimits(
-                                    store, peopleServer(store), managed.login,
-                                    dayValue, monthValue, speedValue);
-                            mainHandler.post(() -> {
-                                Toast.makeText(this,
-                                        "Лимиты применены · код менять не нужно",
-                                        Toast.LENGTH_SHORT).show();
-                                showPeoplePage(null, null);
-                            });
-                        } catch (Exception error) {
-                            mainHandler.post(() -> Toast.makeText(
-                                    this, error.getMessage(), Toast.LENGTH_LONG).show());
-                        }
-                    });
-                }));
-        dialog.show();
-    }
-
-    private void runExtendManagedUser(ServerAccessManager.ManagedUser managed, int days) {
-        speedWorker.execute(() -> {
-            try {
-                SecureStore store = new SecureStore(this);
-                ServerAccessManager.extend(
-                        store, peopleServer(store), managed.login, days);
-                mainHandler.post(() -> {
-                    Toast.makeText(this, "Срок обновлён", Toast.LENGTH_SHORT).show();
-                    showPeoplePage(null, null);
-                });
-            } catch (Exception error) {
-                mainHandler.post(() ->
-                        Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show());
-            }
-        });
-    }
-
-    private void confirmResetManagedUserUsage(
-            ServerAccessManager.ManagedUser managed) {
-        new AlertDialog.Builder(this)
-                .setTitle("Обнулить трафик у " + managed.label + "?")
-                .setMessage("Дневной и месячный счётчики станут равны нулю. "
-                        + "Размер самих лимитов и код доступа не изменятся.")
-                .setPositiveButton("Обнулить", (dialog, which) ->
-                        speedWorker.execute(() -> {
-                            try {
-                                SecureStore store = new SecureStore(this);
-                                ServerAccessManager.resetUsage(
-                                        store, peopleServer(store), managed.login);
-                                mainHandler.post(() -> {
-                                    Toast.makeText(this, "Трафик обнулён",
-                                            Toast.LENGTH_SHORT).show();
-                                    showPeoplePage(null, null);
-                                });
-                            } catch (Exception error) {
-                                mainHandler.post(() -> Toast.makeText(
-                                        this, error.getMessage(),
-                                        Toast.LENGTH_LONG).show());
-                            }
-                        }))
-                .setNegativeButton("Отмена", null)
-                .show();
-    }
-
-    private void confirmRevokeManagedUser(ServerAccessManager.ManagedUser managed) {
-        new AlertDialog.Builder(this)
-                .setTitle("Отозвать доступ у " + managed.label + "?")
-                .setMessage("Linux-учётная запись будет удалена с сервера. Старый код перестанет работать.")
-                .setPositiveButton("Отозвать", (dialog, which) -> speedWorker.execute(() -> {
-                    try {
-                        SecureStore store = new SecureStore(this);
-                        ServerAccessManager.revoke(
-                                store, peopleServer(store), managed.login);
-                        mainHandler.post(() -> showPeoplePage(null, null));
-                    } catch (Exception error) {
-                        mainHandler.post(() ->
-                                Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show());
-                    }
-                }))
-                .setNegativeButton("Отмена", null)
-                .show();
-    }
-
     private void showSettingsHub() {
         LinearLayout page = createPageContent("Настройки",
                 "Общие параметры приложения. Настройки конкретного сервера находятся "
@@ -916,20 +221,18 @@ public class MainActivity extends Activity {
         addSectionTitle(page, "Обновления");
         LinearLayout channel = createCard();
         addCardTitle(channel, "Канал обновлений");
-        addCardSubtitle(channel, Branding.isSecret(this)
-                ? "В debug-режиме можно получать тестовые сборки."
-                : "Beta-канал доступен только в Huyna debug mode.");
+        addCardSubtitle(channel,
+                "Можно получать только стабильные либо также тестовые сборки.");
         RadioGroup channels = new RadioGroup(this);
         channels.setOrientation(RadioGroup.VERTICAL);
         RadioButton stable = createRadio("Стабильные версии",
                 "Только проверенные полноценные релизы");
         RadioButton beta = createRadio("Beta и стабильные",
                 "Новые функции раньше, возможны ошибки");
-        beta.setEnabled(Branding.isSecret(this));
         channels.addView(stable);
         channels.addView(beta);
-        boolean betaEnabled = Branding.isSecret(this)
-                && new SecureStore(this).getBoolean("beta_updates", false);
+        boolean betaEnabled =
+                new SecureStore(this).getBoolean("beta_updates", false);
         (betaEnabled ? beta : stable).setChecked(true);
         channels.setOnCheckedChangeListener((group, checkedId) ->
                 new SecureStore(this).putBoolean("beta_updates",
@@ -938,14 +241,14 @@ public class MainActivity extends Activity {
         page.addView(channel, pageCardParams());
         addPageAction(page, "Проверить обновления сейчас",
                 "Проверка выбранного выше канала",
-                () -> maybeCheckForUpdate(true, Branding.isSecret(this)
-                        && new SecureStore(this).getBoolean("beta_updates", false)));
+                () -> maybeCheckForUpdate(true,
+                        new SecureStore(this).getBoolean("beta_updates", false)));
 
         addSectionTitle(page, "Конфиги и инструменты");
         addPageAction(page, "Импортировать конфиг",
                 "Добавить сервер из готового файла", this::beginImport);
         addPageAction(page, "Экспортировать активный сервер",
-                "Создать файл и поделиться им", this::beginExport);
+                "Создать безопасный файл без пароля", this::beginExport);
         addPageAction(page, "Настроить Telegram",
                 "Передать Telegram ссылку на локальный SOCKS5", this::openTelegramProxy);
         addPageAction(page, "Проверить скорость",
@@ -968,13 +271,13 @@ public class MainActivity extends Activity {
         page.setPadding(dp(20), dp(18), dp(20), dp(28));
         TextView titleView = new TextView(this);
         titleView.setText(title);
-        titleView.setTextColor(0xFFF5F6F7);
-        titleView.setTextSize(28);
+        titleView.setTextColor(UI_PALE);
+        titleView.setTextSize(32);
         titleView.setTypeface(null, android.graphics.Typeface.BOLD);
         page.addView(titleView);
         TextView subtitleView = new TextView(this);
         subtitleView.setText(subtitle);
-        subtitleView.setTextColor(0xFF9297A2);
+        subtitleView.setTextColor(UI_MUTED);
         subtitleView.setTextSize(14);
         subtitleView.setPadding(0, dp(5), 0, dp(10));
         page.addView(subtitleView);
@@ -1017,7 +320,6 @@ public class MainActivity extends Activity {
 
     private void setSelectedNav(View selected) {
         tintNav(navHome, selected == navHome);
-        tintNav(navPeople, selected == navPeople);
         tintNav(navSettings, selected == navSettings);
         tintNav(navAdd, selected == navAdd);
     }
@@ -1025,13 +327,11 @@ public class MainActivity extends Activity {
     private void tintNav(View view, boolean selected) {
         if (!(view instanceof LinearLayout)) return;
         LinearLayout group = (LinearLayout) view;
-        int color = selected ? 0xFFFFAA5B : 0xFFB8BBC3;
+        int color = selected ? UI_ACCENT : UI_MUTED;
         for (int i = 0; i < group.getChildCount(); i++) {
             View child = group.getChildAt(i);
             if (child instanceof TextView) ((TextView) child).setTextColor(color);
-            if (child instanceof ImageView) {
-                ((ImageView) child).setColorFilter(color);
-            }
+            if (child instanceof ImageView) ((ImageView) child).setColorFilter(color);
         }
     }
 
@@ -1054,8 +354,8 @@ public class MainActivity extends Activity {
     private void addSectionTitle(LinearLayout page, String title) {
         TextView heading = new TextView(this);
         heading.setText(title);
-        heading.setTextColor(0xFFF1F2F4);
-        heading.setTextSize(19);
+        heading.setTextColor(UI_PALE);
+        heading.setTextSize(20);
         heading.setTypeface(null, android.graphics.Typeface.BOLD);
         heading.setPadding(0, dp(18), 0, dp(2));
         page.addView(heading);
@@ -1064,7 +364,7 @@ public class MainActivity extends Activity {
     private void addCardTitle(LinearLayout card, String title) {
         TextView view = new TextView(this);
         view.setText(title);
-        view.setTextColor(0xFFF3F4F6);
+        view.setTextColor(UI_PALE);
         view.setTextSize(16);
         view.setTypeface(null, android.graphics.Typeface.BOLD);
         card.addView(view);
@@ -1073,19 +373,19 @@ public class MainActivity extends Activity {
     private void addCardSubtitle(LinearLayout card, String subtitle) {
         TextView view = new TextView(this);
         view.setText(subtitle);
-        view.setTextColor(0xFF9297A2);
+        view.setTextColor(UI_MUTED);
         view.setTextSize(13);
         view.setPadding(0, dp(4), 0, dp(4));
         card.addView(view);
     }
 
-    private CheckBox addToggleCard(
+    private void addToggleCard(
             LinearLayout page, String title, String subtitle,
             boolean checked, ToggleChange onChange) {
         LinearLayout card = createCard();
         CheckBox toggle = new CheckBox(this);
         toggle.setText(title);
-        toggle.setTextColor(0xFFF3F4F6);
+        toggle.setTextColor(UI_PALE);
         toggle.setTextSize(16);
         toggle.setTypeface(null, android.graphics.Typeface.BOLD);
         toggle.setChecked(checked);
@@ -1093,14 +393,13 @@ public class MainActivity extends Activity {
         addCardSubtitle(card, subtitle);
         toggle.setOnCheckedChangeListener((button, value) -> onChange.onChange(value));
         page.addView(card, pageCardParams());
-        return toggle;
     }
 
     private RadioButton createRadio(String title, String subtitle) {
         RadioButton radio = new RadioButton(this);
         radio.setId(View.generateViewId());
         radio.setText(title + "\n" + subtitle);
-        radio.setTextColor(0xFFF1F2F4);
+        radio.setTextColor(UI_PALE);
         radio.setTextSize(14);
         radio.setPadding(0, dp(5), 0, dp(5));
         return radio;
@@ -1120,12 +419,10 @@ public class MainActivity extends Activity {
     private void showSplitTunnelPage() {
         SecureStore store = new SecureStore(this);
         SplitTunnel.ensureDefaults(store);
-        List<SplitTunnel.Profile> selectedProfiles = SplitTunnel.selected(store);
-        SplitTunnel.Profile active = SplitTunnel.combined(store);
+        SplitTunnel.Profile active = SplitTunnel.active(store);
         LinearLayout page = createPageContent("Раздельное туннелирование",
-                "Можно выбрать несколько наборов одного типа. Их адреса объединятся. "
-                        + "Набор другого типа начинает новую комбинацию, потому что режимы "
-                        + "«только через VPN» и «кроме VPN» нельзя смешивать.");
+                "1. Включи функцию. 2. Выбери набор. 3. Через шестерёнку укажи, куда "
+                        + "направлять адреса. Работающий VPN переподключится автоматически.");
 
         addToggleCard(page, "Использовать раздельные маршруты",
                 "Если выключено, весь трафик работает как раньше и идёт через VPN.",
@@ -1138,7 +435,7 @@ public class MainActivity extends Activity {
             LinearLayout current = createCard();
             TextView name = new TextView(this);
             name.setText(active.name);
-            name.setTextColor(0xFFFFAA5B);
+            name.setTextColor(UI_ACCENT);
             name.setTextSize(21);
             name.setTypeface(null, android.graphics.Typeface.BOLD);
             current.addView(name);
@@ -1146,13 +443,8 @@ public class MainActivity extends Activity {
                     (SplitTunnel.MODE_ONLY.equals(active.mode)
                             ? "Через VPN только адреса из списка"
                             : "Через VPN всё, кроме адресов из списка")
-                            + " · наборов: " + selectedProfiles.size()
                             + " · " + active.entries.size() + " записей");
-            boolean brawlSelected = false;
-            for (SplitTunnel.Profile profile : selectedProfiles) {
-                if (SplitTunnel.isBrawlTest(profile)) brawlSelected = true;
-            }
-            if (brawlSelected) {
+            if (SplitTunnel.isBrawlTest(active)) {
                 addCardSubtitle(current,
                         "Проверка: остальные сайты должны видеть VPN, а Brawl Stars — "
                                 + "подключаться напрямую и не запускаться без VPN.");
@@ -1162,38 +454,21 @@ public class MainActivity extends Activity {
 
         addSectionTitle(page, "Наборы адресов");
         for (SplitTunnel.Profile profile : SplitTunnel.list(store)) {
-            boolean selected = false;
-            for (SplitTunnel.Profile selectedProfile : selectedProfiles) {
-                if (selectedProfile.id.equals(profile.id)) selected = true;
-            }
+            boolean selected = active != null && active.id.equals(profile.id);
             LinearLayout row = new LinearLayout(this);
             row.setGravity(android.view.Gravity.CENTER_VERTICAL);
             row.setPadding(dp(4), dp(10), 0, dp(10));
             row.setClickable(true);
             row.setFocusable(true);
             row.setOnClickListener(v -> {
-                boolean replacingMode = false;
-                List<SplitTunnel.Profile> before = SplitTunnel.selected(store);
-                if (!before.isEmpty() && !before.get(0).mode.equals(profile.mode)) {
-                    replacingMode = true;
-                }
-                if (!SplitTunnel.toggleSelected(store, profile.id)) {
-                    Toast.makeText(this, "Должен остаться хотя бы один набор",
-                            Toast.LENGTH_SHORT).show();
-                    return;
-                }
+                SplitTunnel.activate(store, profile.id);
                 applySplitTunnelChanges();
                 showSplitTunnelPage();
-                if (replacingMode) {
-                    Toast.makeText(this,
-                            "Выбран другой тип — предыдущая комбинация заменена",
-                            Toast.LENGTH_LONG).show();
-                }
             });
 
             TextView marker = new TextView(this);
-            marker.setText(selected ? "☑" : "☐");
-            marker.setTextColor(selected ? 0xFFFFAA5B : 0xFF7D828D);
+            marker.setText(selected ? "●" : "○");
+            marker.setTextColor(selected ? UI_ACCENT : UI_MUTED);
             marker.setTextSize(27);
             marker.setGravity(android.view.Gravity.CENTER);
             row.addView(marker, new LinearLayout.LayoutParams(dp(52), dp(58)));
@@ -1204,7 +479,7 @@ public class MainActivity extends Activity {
                     0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
             TextView title = new TextView(this);
             title.setText(profile.name);
-            title.setTextColor(selected ? 0xFFFFAA5B : 0xFFF1F2F4);
+            title.setTextColor(selected ? UI_ACCENT : UI_PALE);
             title.setTextSize(17);
             title.setSingleLine(true);
             labels.addView(title);
@@ -1212,14 +487,14 @@ public class MainActivity extends Activity {
             subtitle.setText((SplitTunnel.MODE_ONLY.equals(profile.mode)
                     ? "Только через VPN" : "Исключить из VPN")
                     + " · " + profile.entries.size() + " записей");
-            subtitle.setTextColor(0xFF9297A2);
+            subtitle.setTextColor(UI_MUTED);
             subtitle.setTextSize(13);
             labels.addView(subtitle);
             row.addView(labels);
 
             TextView edit = new TextView(this);
             edit.setText("⚙");
-            edit.setTextColor(0xFFF1F2F4);
+            edit.setTextColor(UI_PALE);
             edit.setTextSize(23);
             edit.setGravity(android.view.Gravity.CENTER);
             edit.setClickable(true);
@@ -1229,7 +504,7 @@ public class MainActivity extends Activity {
             page.addView(row);
 
             View divider = new View(this);
-            divider.setBackgroundColor(0xFF2A2C31);
+            divider.setBackgroundColor(UI_SLATE);
             LinearLayout.LayoutParams dividerParams = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, dp(1));
             dividerParams.leftMargin = dp(52);
@@ -1249,7 +524,7 @@ public class MainActivity extends Activity {
         note.setText("Важно: набор «Искл. российские сервисы» — стартовый и редактируемый. "
                 + "Сервисы используют CDN и меняют адреса, поэтому он не может быть "
                 + "абсолютно полным. Переподключение обновляет IP доменов.");
-        note.setTextColor(0xFF7F8490);
+        note.setTextColor(UI_MUTED);
         note.setTextSize(12);
         note.setPadding(0, dp(18), 0, 0);
         page.addView(note);
@@ -1290,7 +565,7 @@ public class MainActivity extends Activity {
         EditText entries = new EditText(this);
         entries.setHint("example.com\n1.1.1.1\n10.0.0.0/8");
         entries.setHintTextColor(0xFF676C76);
-        entries.setTextColor(0xFFF3F4F6);
+        entries.setTextColor(UI_PALE);
         entries.setTextSize(15);
         entries.setGravity(android.view.Gravity.TOP);
         entries.setMinLines(10);
@@ -1310,7 +585,7 @@ public class MainActivity extends Activity {
         page.addView(entriesCard, pageCardParams());
 
         Button saveProfile = new Button(this);
-        saveProfile.setText("СОХРАНИТЬ НАБОР");
+        saveProfile.setText("Сохранить набор");
         LinearLayout.LayoutParams saveParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, dp(58));
         saveParams.topMargin = dp(22);
@@ -1336,8 +611,9 @@ public class MainActivity extends Activity {
 
         if (profile != null && SplitTunnel.list(store).size() > 1) {
             Button delete = new Button(this);
-            delete.setText("УДАЛИТЬ НАБОР");
-            delete.setTextColor(0xFFFF7272);
+            delete.setText("Удалить набор");
+            delete.setBackgroundResource(R.drawable.button_secondary_background);
+            delete.setTextColor(0xFFEB5757);
             page.addView(delete);
             delete.setOnClickListener(v -> new AlertDialog.Builder(this)
                     .setTitle("Удалить набор «" + profile.name + "»?")
@@ -1354,7 +630,7 @@ public class MainActivity extends Activity {
 
     private void updateSplitSummary() {
         SecureStore store = new SecureStore(this);
-        SplitTunnel.Profile active = SplitTunnel.combined(store);
+        SplitTunnel.Profile active = SplitTunnel.active(store);
         if (!SplitTunnel.enabled(store)) {
             splitTunnelSummary.setText("Выключено · весь трафик через VPN");
             return;
@@ -1366,9 +642,7 @@ public class MainActivity extends Activity {
         splitTunnelSummary.setText(
                 (SplitTunnel.MODE_ONLY.equals(active.mode)
                         ? "Только через VPN: " : "Не через VPN: ")
-                        + active.name + " · наборов: "
-                        + SplitTunnel.selected(store).size()
-                        + " · " + active.entries.size());
+                        + active.name + " · " + active.entries.size());
     }
 
     private void applySplitTunnelChanges() {
@@ -1384,14 +658,12 @@ public class MainActivity extends Activity {
                         .setAction(VpnTunnelService.RELOAD_ROUTES), store);
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(reload);
         else startService(reload);
-        routingApplying = true;
-        updateModeButtons();
         Toast.makeText(this, "Применяем маршруты…",
                 Toast.LENGTH_SHORT).show();
     }
 
     private void beginSplitExport() {
-        SplitTunnel.Profile profile = SplitTunnel.combined(new SecureStore(this));
+        SplitTunnel.Profile profile = SplitTunnel.active(new SecureStore(this));
         if (profile == null) {
             Toast.makeText(this, "Сначала создай набор", Toast.LENGTH_SHORT).show();
             return;
@@ -1413,7 +685,7 @@ public class MainActivity extends Activity {
     private void writeSplitConfig(Uri uri) {
         if (uri == null) return;
         try (OutputStream output = getContentResolver().openOutputStream(uri, "wt")) {
-            SplitTunnel.Profile profile = SplitTunnel.combined(new SecureStore(this));
+            SplitTunnel.Profile profile = SplitTunnel.active(new SecureStore(this));
             if (output == null || profile == null) throw new Exception("No active profile");
             output.write(SplitTunnel.exportJson(profile).getBytes(StandardCharsets.UTF_8));
             Toast.makeText(this, "Набор экспортирован", Toast.LENGTH_SHORT).show();
@@ -1570,6 +842,10 @@ public class MainActivity extends Activity {
             return;
         }
         if (!saveSettings()) return;
+        ensureSshHostKey(this::showServerTlsSetupConfirmation);
+    }
+
+    private void showServerTlsSetupConfirmation() {
         new AlertDialog.Builder(this)
                 .setTitle("Автоматически настроить сервер?")
                 .setMessage("Приложение подключится по обычному SSH, проверит Debian/Ubuntu "
@@ -1667,8 +943,8 @@ public class MainActivity extends Activity {
     }
 
     private void maybeCheckForUpdate(boolean manual) {
-        boolean includePrereleases = Branding.isSecret(this)
-                && new SecureStore(this).getBoolean("beta_updates", false);
+        boolean includePrereleases =
+                new SecureStore(this).getBoolean("beta_updates", false);
         maybeCheckForUpdate(manual, includePrereleases);
     }
 
@@ -1878,7 +1154,9 @@ public class MainActivity extends Activity {
                 Toast.LENGTH_LONG).show();
     }
 
+    @android.annotation.TargetApi(33)
     private void requestQuickSettingsTile() {
+        if (Build.VERSION.SDK_INT < 33) return;
         SecureStore store = new SecureStore(this);
         if (store.getBoolean("tile_requested", false)) return;
         store.putBoolean("tile_requested", true);
@@ -1887,22 +1165,28 @@ public class MainActivity extends Activity {
             manager.requestAddTileService(
                     new ComponentName(this, QuickSettingsTileService.class),
                     Branding.appName(this),
-                    Icon.createWithResource(this, R.drawable.ic_pelmeni_tile),
+                    Icon.createWithResource(
+                            this, QuickSettingsTileService.iconResource(this)),
                     getMainExecutor(),
                     result -> { });
         } catch (Exception ignored) {
         }
     }
 
+    @android.annotation.SuppressLint("UnspecifiedRegisterReceiverFlag")
     @Override protected void onStart() {
         super.onStart();
+        connectButtonDrawable.setConnecting(
+                running && !TunnelService.isConnected());
         IntentFilter filter = new IntentFilter(TunnelService.ACTION_STATUS);
+        filter.addAction(Branding.ACTION_CHANGED);
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED);
         else registerReceiver(receiver, filter);
         receiverRegistered = true;
     }
 
     @Override protected void onStop() {
+        connectButtonDrawable.stop();
         if (receiverRegistered) {
             try { unregisterReceiver(receiver); } catch (IllegalArgumentException ignored) {}
             receiverRegistered = false;
@@ -1911,8 +1195,6 @@ public class MainActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
-        ringTelegram.setConnecting(false);
-        ringVpn.setConnecting(false);
         speedWorker.shutdownNow();
         super.onDestroy();
     }
@@ -1936,56 +1218,10 @@ public class MainActivity extends Activity {
         autoReconnect.setChecked(store.getBoolean("auto_reconnect", true));
         startOnBoot.setChecked(store.getBoolean("start_on_boot", false));
         boolean vpnEnabled = store.getBoolean("vpn_mode", false);
-        suppressModeChanges = true;
-        try {
-            enableVpn.setChecked(vpnEnabled);
-            enableTelegram.setChecked(store.getBoolean("telegram_proxy", !vpnEnabled));
-        } finally {
-            suppressModeChanges = false;
-        }
+        enableVpn.setChecked(vpnEnabled);
+        enableTelegram.setChecked(store.getBoolean("telegram_proxy", !vpnEnabled));
         updateSplitSummary();
         updateServerCard();
-        updateModeButtons();
-        updateAccessLimitSummary();
-    }
-
-    private void toggleModeFromButton(boolean vpn) {
-        if (!running) {
-            suppressModeChanges = true;
-            try {
-                enableVpn.setChecked(vpn);
-                enableTelegram.setChecked(!vpn);
-            } finally {
-                suppressModeChanges = false;
-            }
-            SecureStore store = new SecureStore(this);
-            store.putBoolean("vpn_mode", vpn);
-            store.putBoolean("telegram_proxy", !vpn);
-            updateModeButtons();
-            startTunnel();
-            return;
-        }
-        CheckBox target = vpn ? enableVpn : enableTelegram;
-        target.setChecked(!target.isChecked());
-    }
-
-    private void updateModeButtons() {
-        boolean proxyActive = running && enableTelegram.isChecked();
-        boolean vpnActive = running && enableVpn.isChecked();
-        toggleTelegram.setText(proxyConnecting
-                ? "ПРОКСИ\nПОДКЛЮЧЕНИЕ"
-                : proxyActive ? "ПРОКСИ\nВКЛЮЧЕН" : "ПРОКСИ\nВКЛЮЧИТЬ");
-        toggleVpn.setText(vpnConnecting
-                ? "VPN\nПОДКЛЮЧЕНИЕ"
-                : vpnActive ? "VPN\nВКЛЮЧЕН" : "VPN\nВКЛЮЧИТЬ");
-        toggleTelegram.setTextColor(proxyActive ? 0xFFFFAA5B : 0xFFB8BBC3);
-        toggleVpn.setTextColor(vpnActive ? 0xFFFFAA5B : 0xFFB8BBC3);
-        toggleTelegram.setActivated(proxyActive && !proxyConnecting);
-        toggleVpn.setActivated(vpnActive && !vpnConnecting);
-        ringTelegram.setConnecting(proxyConnecting);
-        ringVpn.setConnecting(vpnConnecting);
-        splitRouteProgress.setVisibility(routingApplying
-                ? View.VISIBLE : View.GONE);
     }
 
     private boolean saveSettings() {
@@ -2051,111 +1287,22 @@ public class MainActivity extends Activity {
         if (active == null) {
             serverName.setText("Сервер не добавлен");
             serverAddress.setText("Добавь первый сервер");
-            serverSelect.setText("ДОБАВИТЬ");
-            serverEdit.setText("ДОБАВИТЬ");
-            userLimitSummary.setVisibility(View.GONE);
+            serverSelect.setText("Добавить");
+            serverEdit.setText("Добавить");
             return;
         }
         serverName.setText(active.name);
         serverAddress.setText(active.host + ":" + active.sshPort
                 + " · " + active.user);
-        serverSelect.setText("СМЕНИТЬ");
-        serverEdit.setText("ПАРАМЕТРЫ");
-        updateAccessLimitSummary();
-    }
-
-    private void updateAccessLimitSummary() {
-        SecureStore store = new SecureStore(this);
-        ServerProfiles.Profile profile = ServerProfiles.active(store);
-        if (profile == null) {
-            userLimitSummary.setVisibility(View.GONE);
-            userTrafficLimitPanel.setVisibility(View.GONE);
-            return;
-        }
-        UserAccessPolicy.Policy policy = UserAccessPolicy.load(store, profile.id);
-        if (!policy.configured) {
-            userLimitSummary.setVisibility(View.GONE);
-            userTrafficLimitPanel.setVisibility(View.GONE);
-            return;
-        }
-        UserAccessPolicy.Usage usage = UserAccessPolicy.usage(store, profile.id);
-        updateUserTrafficLimitProgress(policy, usage);
-        String expiry = policy.expires.isEmpty() ? "бессрочно" : "до " + policy.expires;
-        String daily = policy.dailyMb > 0
-                ? formatBytes(usage.dayBytes) + " из " + policy.dailyMb + " МБ сегодня"
-                : "без дневного лимита";
-        String monthly = policy.monthlyMb > 0
-                ? formatBytes(usage.monthBytes) + " из " + policy.monthlyMb + " МБ за месяц"
-                : "без месячного лимита";
-        String speed = policy.speedMbps > 0
-                ? policy.speedMbps + " Мбит/с" : "без ограничения скорости";
-        String warning = UserAccessPolicy.warning(policy, usage);
-        boolean notificationsBlocked = Build.VERSION.SDK_INT >= 33
-                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
-                != android.content.pm.PackageManager.PERMISSION_GRANTED;
-        userLimitSummary.setText("Ваш доступ · " + expiry + "\n"
-                + daily + " · " + monthly + "\nСкорость: " + speed
-                + (policy.dailyMb > 0 ? "\nДневной сброс "
-                + limitResetCountdown(policy.issuedAt, false) : "")
-                + (policy.monthlyMb > 0 ? " · месячный "
-                + limitResetCountdown(policy.issuedAt, true) : "")
-                + (warning.isEmpty() ? "" : "\n⚠ " + warning)
-                + (notificationsBlocked
-                ? "\n⚠ Уведомления запрещены Android — нажми сюда, чтобы включить." : ""));
-        userLimitSummary.setOnClickListener(notificationsBlocked ? v -> {
-            Intent settings = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-                    .putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName());
-            startActivity(settings);
-        } : null);
-        double ratio = Math.max(
-                policy.dailyMb > 0
-                        ? usage.dayBytes / (policy.dailyMb * 1024.0 * 1024.0) : 0,
-                policy.monthlyMb > 0
-                        ? usage.monthBytes / (policy.monthlyMb * 1024.0 * 1024.0) : 0);
-        userLimitSummary.setTextColor(ratio >= 1.0 ? 0xFFFF7272
-                : ratio >= 0.8 ? 0xFFFFAA5B : 0xFFD7DAE0);
-        userLimitSummary.setVisibility(View.VISIBLE);
-    }
-
-    private void updateUserTrafficLimitProgress(
-            UserAccessPolicy.Policy policy, UserAccessPolicy.Usage usage) {
-        boolean hasDaily = policy.dailyMb > 0;
-        boolean hasMonthly = policy.monthlyMb > 0;
-        userTrafficLimitPanel.setVisibility(
-                hasDaily || hasMonthly ? View.VISIBLE : View.GONE);
-        userDailyLimitGroup.setVisibility(hasDaily ? View.VISIBLE : View.GONE);
-        userMonthlyLimitGroup.setVisibility(hasMonthly ? View.VISIBLE : View.GONE);
-        if (hasDaily) {
-            setUserLimitProgress(userDailyLimitLabel, userDailyLimitProgress,
-                    "За 24 часа", usage.dayBytes, policy.dailyMb,
-                    limitResetCountdown(policy.issuedAt, false));
-        }
-        if (hasMonthly) {
-            setUserLimitProgress(userMonthlyLimitLabel, userMonthlyLimitProgress,
-                    "За 30 дней", usage.monthBytes, policy.monthlyMb,
-                    limitResetCountdown(policy.issuedAt, true));
-        }
-    }
-
-    private void setUserLimitProgress(
-            TextView label, ProgressBar bar, String period,
-            long usedBytes, long limitMb, String reset) {
-        double ratio = usedBytes / (limitMb * 1024.0 * 1024.0);
-        int percent = (int) Math.min(999, Math.max(0, ratio * 100));
-        label.setText(period + " · " + formatBytes(usedBytes)
-                + " из " + limitMb + " МБ · " + percent + "%\nСброс " + reset);
-        int color = ratio >= 1 ? 0xFFFF7272
-                : ratio >= 0.75 ? 0xFFFFAA5B : 0xFF77C68A;
-        label.setTextColor(color);
-        bar.setProgress((int) Math.min(1000, Math.max(0, ratio * 1000)));
-        bar.setProgressTintList(ColorStateList.valueOf(color));
+        serverSelect.setText("Сменить");
+        serverEdit.setText("Параметры");
     }
 
     private void showServerList() {
         SecureStore store = new SecureStore(this);
         List<ServerProfiles.Profile> profiles = ServerProfiles.list(store);
         if (profiles.isEmpty()) {
-            showAddServerChoice();
+            showServerEditor(null);
             return;
         }
         ServerProfiles.Profile active = ServerProfiles.active(store);
@@ -2166,8 +1313,8 @@ public class MainActivity extends Activity {
         if (active != null) {
             TextView currentName = new TextView(this);
             currentName.setText(active.name);
-            currentName.setTextColor(0xFFF3F4F6);
-            currentName.setTextSize(27);
+            currentName.setTextColor(UI_PALE);
+            currentName.setTextSize(25);
             currentName.setGravity(android.view.Gravity.CENTER);
             currentName.setTypeface(null, android.graphics.Typeface.BOLD);
             currentName.setPadding(0, dp(20), 0, dp(5));
@@ -2175,7 +1322,7 @@ public class MainActivity extends Activity {
 
             TextView currentAddress = new TextView(this);
             currentAddress.setText(active.host + ":" + active.sshPort);
-            currentAddress.setTextColor(0xFF9297A2);
+            currentAddress.setTextColor(UI_MUTED);
             currentAddress.setTextSize(14);
             currentAddress.setGravity(android.view.Gravity.CENTER);
             currentAddress.setPadding(0, 0, 0, dp(18));
@@ -2184,8 +1331,8 @@ public class MainActivity extends Activity {
 
         TextView heading = new TextView(this);
         heading.setText("Серверы");
-        heading.setTextColor(0xFFF3F4F6);
-        heading.setTextSize(22);
+        heading.setTextColor(UI_PALE);
+        heading.setTextSize(20);
         heading.setTypeface(null, android.graphics.Typeface.BOLD);
         heading.setPadding(0, dp(18), 0, dp(8));
         page.addView(heading);
@@ -2203,7 +1350,7 @@ public class MainActivity extends Activity {
 
             TextView marker = new TextView(this);
             marker.setText(selected ? "●" : "○");
-            marker.setTextColor(selected ? 0xFFFFAA5B : 0xFF7D828D);
+            marker.setTextColor(selected ? UI_ACCENT : UI_MUTED);
             marker.setTextSize(27);
             marker.setGravity(android.view.Gravity.CENTER);
             marker.setContentDescription(selected ? "Выбран" : "Не выбран");
@@ -2219,14 +1366,14 @@ public class MainActivity extends Activity {
 
             TextView name = new TextView(this);
             name.setText(profile.name);
-            name.setTextColor(selected ? 0xFFFFAA5B : 0xFFF1F2F4);
+            name.setTextColor(selected ? UI_ACCENT : UI_PALE);
             name.setTextSize(18);
             name.setSingleLine(true);
             labels.addView(name);
 
             TextView address = new TextView(this);
             address.setText(profile.host + ":" + profile.sshPort);
-            address.setTextColor(0xFF9297A2);
+            address.setTextColor(UI_MUTED);
             address.setTextSize(13);
             address.setSingleLine(true);
             address.setPadding(0, 3, 0, 0);
@@ -2236,7 +1383,7 @@ public class MainActivity extends Activity {
             TextView edit = new TextView(this);
             edit.setText("⚙");
             edit.setTextSize(23);
-            edit.setTextColor(0xFFF1F2F4);
+            edit.setTextColor(UI_PALE);
             edit.setGravity(android.view.Gravity.CENTER);
             edit.setClickable(true);
             edit.setFocusable(true);
@@ -2249,7 +1396,7 @@ public class MainActivity extends Activity {
             page.addView(row);
 
             View divider = new View(this);
-            divider.setBackgroundColor(0xFF2A2C31);
+            divider.setBackgroundColor(UI_SLATE);
             LinearLayout.LayoutParams dividerParams = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
                     Math.max(1, dp(1)));
@@ -2257,15 +1404,17 @@ public class MainActivity extends Activity {
             page.addView(divider, dividerParams);
         }
 
-        Button add = new Button(this);
-        add.setText("＋  ДОБАВИТЬ СЕРВЕР");
-        add.setTextSize(15);
-        LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT);
-        addParams.topMargin = dp(22);
-        add.setOnClickListener(v -> showAddServerChoice());
-        page.addView(add, addParams);
+        if (!running) {
+            Button add = new Button(this);
+            add.setText("＋  Добавить сервер");
+            add.setTextSize(15);
+            LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT);
+            addParams.topMargin = dp(22);
+            add.setOnClickListener(v -> showServerEditor(null));
+            page.addView(add, addParams);
+        }
         showScrollablePage(page, navHome);
     }
 
@@ -2289,22 +1438,19 @@ public class MainActivity extends Activity {
     }
 
     private void showServerEditor(ServerProfiles.Profile profile) {
-        if (running && profile != null) {
+        if (running) {
             Toast.makeText(this, "Сначала отключи туннель", Toast.LENGTH_SHORT).show();
             return;
         }
         SecureStore store = new SecureStore(this);
-        boolean sharedAccess = profile != null && profile.user.startsWith("pel_");
         LinearLayout page = createPageContent(
                 profile == null ? "Новый сервер" : profile.name,
                 profile == null
                         ? "Добавь данные SSH-сервера. Все параметры можно изменить позже."
-                        : sharedAccess
-                        ? "Сервер добавлен по коду. Название и параметры на этом телефоне можно менять независимо от владельца."
                         : "Настройки этого сервера. Они не влияют на остальные профили.");
 
         addSectionTitle(page, "Основное");
-        EditText profileName = addServerField(page, "Название на этом телефоне",
+        EditText profileName = addServerField(page, "Название сервера",
                 profile == null ? "" : profile.name,
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
         EditText profileHost = addServerField(page, "IP-адрес или домен",
@@ -2316,37 +1462,12 @@ public class MainActivity extends Activity {
         EditText profilePassword = addServerField(page, "Пароль SSH",
                 profile == null ? "" : ServerProfiles.password(store, profile.id),
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        if (sharedAccess) {
-            ((View) profileHost.getParent()).setVisibility(View.GONE);
-            ((View) profileUser.getParent()).setVisibility(View.GONE);
-            ((View) profilePassword.getParent()).setVisibility(View.GONE);
-            LinearLayout shared = createCard();
-            addCardTitle(shared, "Личный профиль");
-            addCardSubtitle(shared,
-                    "Название меняется только у тебя. Адрес, логин и пароль управляются владельцем сервера.");
-            UserAccessPolicy.Policy access = UserAccessPolicy.load(store, profile.id);
-            if (access.configured) {
-                addCardSubtitle(shared,
-                        "Срок: " + (access.expires.isEmpty() ? "бессрочно" : "до " + access.expires)
-                                + "\nДень: " + (access.dailyMb > 0
-                                ? access.dailyMb + " МБ" : "без лимита")
-                                + " · месяц: " + (access.monthlyMb > 0
-                                ? access.monthlyMb + " МБ" : "без лимита")
-                                + "\nСкорость: " + (access.speedMbps > 0
-                                ? access.speedMbps + " Мбит/с" : "без ограничения"));
-            }
-            page.addView(shared, pageCardParams());
-        }
 
         addSectionTitle(page, "Порты");
         EditText profileSshPort = addServerField(page, "SSH-порт",
                 profile == null ? "22" : profile.sshPort,
                 InputType.TYPE_CLASS_NUMBER);
-        if (sharedAccess) {
-            ((View) profileSshPort.getParent()).setVisibility(View.GONE);
-        } else {
-            addQuickChoices(page, profileSshPort, "22", "443", "2222");
-        }
+        addQuickChoices(page, profileSshPort, "22", "443", "2222");
         EditText profileSocksPort = addServerField(page, "Локальный SOCKS5-порт",
                 profile == null ? "1080" : profile.socksPort,
                 InputType.TYPE_CLASS_NUMBER);
@@ -2361,10 +1482,10 @@ public class MainActivity extends Activity {
         presets.setOrientation(RadioGroup.VERTICAL);
         RadioButton compatibility = createRadio("Совместимость",
                 "MTU 1500 — если сайты или тесты зависают");
-        RadioButton balanced = createRadio("Баланс · рекомендуется",
-                "Оптимальные скорость, пинг и расход памяти");
-        RadioButton speed = createRadio("Скорость · эксперимент",
-                "Больше буферы для быстрого сервера и высокого пинга");
+        RadioButton balanced = createRadio("Быстро и стабильно · рекомендуется",
+                "Окно 4 МиБ для соединений с высоким пингом");
+        RadioButton speed = createRadio("Максимальная скорость",
+                "Окно 8 МиБ для быстрого сервера и высокого пинга");
         RadioButton custom = createRadio("Свои значения",
                 "Использовать точные параметры ниже");
         presets.addView(compatibility);
@@ -2375,7 +1496,7 @@ public class MainActivity extends Activity {
         page.addView(presetCard, pageCardParams());
 
         EditText profileWindow = addServerTuningField(page,
-                "Окно SSH · КиБ", "Буфер передачи. Рекомендуется 1024.",
+                "Окно SSH · КиБ", "Буфер передачи. Рекомендуется 4096.",
                 profile == null ? NetworkTuning.DEFAULT_WINDOW_KIB : profile.windowKiB);
         EditText profilePacket = addServerTuningField(page,
                 "Пакет SSH · КиБ", "Размер блока. Рекомендуется 32.",
@@ -2392,7 +1513,8 @@ public class MainActivity extends Activity {
                 && packetValue == NetworkTuning.DEFAULT_PACKET_KIB
                 && mtuValue == NetworkTuning.DEFAULT_MTU) {
             balanced.setChecked(true);
-        } else if (windowValue == 4096 && packetValue == 64 && mtuValue == 8500) {
+        } else if (windowValue == NetworkTuning.HIGH_LATENCY_WINDOW_KIB
+                && packetValue == 64 && mtuValue == 8500) {
             speed.setChecked(true);
         } else {
             custom.setChecked(true);
@@ -2407,13 +1529,14 @@ public class MainActivity extends Activity {
                 profilePacket.setText(Integer.toString(NetworkTuning.DEFAULT_PACKET_KIB));
                 profileMtu.setText(Integer.toString(NetworkTuning.DEFAULT_MTU));
             } else if (checkedId == speed.getId()) {
-                profileWindow.setText("4096");
+                profileWindow.setText(Integer.toString(
+                        NetworkTuning.HIGH_LATENCY_WINDOW_KIB));
                 profilePacket.setText("64");
                 profileMtu.setText("8500");
             }
         });
 
-        if (profile != null && !sharedAccess) {
+        if (profile != null) {
             addSectionTitle(page, "Защита сервера");
             ServerProfiles.Profile active = ServerProfiles.active(store);
             boolean isActive = active != null && active.id.equals(profile.id);
@@ -2426,20 +1549,10 @@ public class MainActivity extends Activity {
                         else Toast.makeText(this, "Сначала выбери этот сервер",
                                 Toast.LENGTH_SHORT).show();
                     });
-            addPageAction(page, "Перенести на новый сервер",
-                    isActive
-                            ? "Скопировать пользователей и настройки, затем заменить адрес этого профиля"
-                            : "Сначала выбери этот сервер активным",
-                    () -> {
-                        if (isActive) showServerMigration(profile);
-                        else Toast.makeText(this, "Сначала выбери этот сервер",
-                                Toast.LENGTH_SHORT).show();
-                    });
         }
 
         Button saveProfile = new Button(this);
-        saveProfile.setText(profile == null ? "ДОБАВИТЬ СЕРВЕР"
-                : sharedAccess ? "СОХРАНИТЬ У СЕБЯ" : "СОХРАНИТЬ");
+        saveProfile.setText(profile == null ? "Добавить сервер" : "Сохранить");
         saveProfile.setTextSize(16);
         LinearLayout.LayoutParams saveParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, dp(58));
@@ -2454,17 +1567,6 @@ public class MainActivity extends Activity {
             int window = parseInt(profileWindow);
             int packet = parseInt(profilePacket);
             int mtu = parseInt(profileMtu);
-            if (Branding.isSecretInput(h, pw)) {
-                boolean enabled = Branding.toggleSecret(this);
-                appTitle.setText(Branding.appName(this));
-                updateDebugPanel();
-                showHomePage();
-                Toast.makeText(this, enabled
-                                ? "Huyna VPN debug mode activated"
-                                : "Возвращено название «Пельмени VPN»",
-                        Toast.LENGTH_LONG).show();
-                return;
-            }
             if (!validHost(h) || !validPort(ssh) || !validPort(socks)
                     || u.isEmpty() || pw.isEmpty()
                     || !NetworkTuning.valid(window, NetworkTuning.MIN_WINDOW_KIB,
@@ -2485,29 +1587,23 @@ public class MainActivity extends Activity {
                             window, packet, mtu).id
                             : profile.id,
                     name, h, ssh, u, socks, window, packet, mtu);
-            boolean reconnect = running;
-            if (reconnect) stopTunnel();
             try {
                 ServerProfiles.saveAndActivate(store, updated, pw);
                 loadSettings();
                 Toast.makeText(this, "Сервер сохранён", Toast.LENGTH_SHORT).show();
                 showServerList();
-                if (reconnect) {
-                    toggle.postDelayed(this::startTunnel, 900);
-                } else if (!sharedAccess) {
-                    maybeOfferTlsForCurrentServer(null);
-                }
+                maybeOfferTlsForCurrentServer(null);
             } catch (Exception error) {
                 Toast.makeText(this, "Не удалось сохранить сервер",
                         Toast.LENGTH_LONG).show();
-                if (reconnect) toggle.postDelayed(this::startTunnel, 900);
             }
         });
 
         if (profile != null && ServerProfiles.list(store).size() > 1) {
             Button delete = new Button(this);
-            delete.setText("УДАЛИТЬ СЕРВЕР");
-            delete.setTextColor(0xFFFF7272);
+            delete.setText("Удалить сервер");
+            delete.setBackgroundResource(R.drawable.button_secondary_background);
+            delete.setTextColor(0xFFEB5757);
             LinearLayout.LayoutParams deleteParams = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -2518,106 +1614,6 @@ public class MainActivity extends Activity {
         showScrollablePage(page, navAdd);
     }
 
-    private void showServerMigration(ServerProfiles.Profile profile) {
-        if (running) {
-            Toast.makeText(this, "Сначала отключи туннель", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        LinearLayout page = createPageContent("Перенос сервера",
-                "Старый сервер должен быть доступен хотя бы на время переноса. "
-                        + "Пельмени скопируют управляемых пользователей, сроки и лимиты, "
-                        + "а TLS-ключи безопасно создадут заново.");
-        EditText newName = addServerField(page, "Новое название", profile.name,
-                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
-        EditText newHost = addServerField(page, "Новый IP или домен", "",
-                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        EditText newUser = addServerField(page, "Администратор SSH", profile.user,
-                InputType.TYPE_CLASS_TEXT);
-        EditText newPassword = addServerField(page, "Пароль администратора", "",
-                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        EditText newPort = addServerField(page, "SSH-порт", profile.sshPort,
-                InputType.TYPE_CLASS_NUMBER);
-        addQuickChoices(page, newPort, "22", "443", "2222");
-
-        LinearLayout warning = createCard();
-        addCardTitle(warning, "Что не переносится");
-        addCardSubtitle(warning,
-                "Чужие сайты, базы данных, firewall и прочие службы Linux не клонируются. "
-                        + "Переносятся только данные Пельмени VPN. Старый сервер автоматически не удаляется.");
-        page.addView(warning, pageCardParams());
-
-        Button migrate = new Button(this);
-        migrate.setText("ПРОВЕРИТЬ И ПЕРЕНЕСТИ");
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(58));
-        params.topMargin = dp(22);
-        page.addView(migrate, params);
-        migrate.setOnClickListener(v -> {
-            String h = newHost.getText().toString().trim();
-            String u = newUser.getText().toString().trim();
-            String pw = newPassword.getText().toString();
-            String portText = newPort.getText().toString().trim();
-            if (!validHost(h) || !validPort(portText) || u.isEmpty() || pw.isEmpty()) {
-                Toast.makeText(this, "Проверь адрес, порт, пользователя и пароль",
-                        Toast.LENGTH_LONG).show();
-                return;
-            }
-            String name = newName.getText().toString().trim();
-            if (name.isEmpty()) name = profile.name;
-            int portValue = Integer.parseInt(portText);
-            String finalName = name;
-            boolean hadTls = TlsTransport.isConfigured(new SecureStore(this));
-            migrate.setEnabled(false);
-            migrate.setText("ПЕРЕНОШУ…");
-            speedWorker.execute(() -> {
-                try {
-                    SecureStore store = new SecureStore(this);
-                    org.json.JSONArray users = ServerAccessManager.exportUsers(store);
-                    ServerAccessManager.Credentials destination =
-                            new ServerAccessManager.Credentials(h, portValue, u, pw);
-                    ServerAccessManager.importUsers(destination, users,
-                            finalName, profile.socksPort, profile.windowKiB,
-                            profile.packetKiB, profile.mtu);
-                    ServerProfiles.Profile moved = new ServerProfiles.Profile(
-                            profile.id, finalName, h, portText, u, profile.socksPort,
-                            profile.windowKiB, profile.packetKiB, profile.mtu);
-                    ServerProfiles.saveAndActivate(store, moved, pw);
-                    TlsTransport.clear(store);
-                    String tlsNote = "";
-                    if (hadTls) {
-                        try {
-                            ServerTlsSetup.Result tls = ServerTlsSetup.install(store);
-                            TlsTransport.save(store, h, tls.port, tls.pkcs12, tls.password);
-                            TlsTransport.snapshotForProfile(store, moved.id);
-                            tlsNote = " TLS на новом сервере создан заново.";
-                        } catch (Exception tlsError) {
-                            tlsNote = " Перенос завершён, но TLS не настроился: "
-                                    + tlsError.getMessage();
-                        }
-                    }
-                    String finalTlsNote = tlsNote;
-                    mainHandler.post(() -> {
-                        loadSettings();
-                        Toast.makeText(this,
-                                "Сервер перенесён. Пользователей: " + users.length()
-                                        + "." + finalTlsNote,
-                                Toast.LENGTH_LONG).show();
-                        showHomePage();
-                    });
-                } catch (Exception error) {
-                    mainHandler.post(() -> {
-                        migrate.setEnabled(true);
-                        migrate.setText("ПРОВЕРИТЬ И ПЕРЕНЕСТИ");
-                        Toast.makeText(this,
-                                "Перенос не выполнен: " + error.getMessage(),
-                                Toast.LENGTH_LONG).show();
-                    });
-                }
-            });
-        });
-        showScrollablePage(page, navAdd);
-    }
-
     private void addQuickChoices(LinearLayout page, EditText field, String... values) {
         LinearLayout choices = new LinearLayout(this);
         choices.setOrientation(LinearLayout.HORIZONTAL);
@@ -2625,6 +1621,8 @@ public class MainActivity extends Activity {
             Button button = new Button(this);
             button.setText(value);
             button.setTextSize(13);
+            button.setBackgroundResource(R.drawable.button_secondary_background);
+            button.setTextColor(UI_PALE);
             LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                     0, dp(46), 1);
             if (choices.getChildCount() > 0) params.leftMargin = dp(6);
@@ -2671,7 +1669,7 @@ public class MainActivity extends Activity {
 
         TextView labelView = new TextView(this);
         labelView.setText(label);
-        labelView.setTextColor(0xFF9297A2);
+        labelView.setTextColor(UI_MUTED);
         labelView.setTextSize(13);
         card.addView(labelView);
 
@@ -2679,8 +1677,8 @@ public class MainActivity extends Activity {
         field.setText(value);
         field.setInputType(inputType);
         field.setSingleLine(true);
-        field.setTextColor(0xFFF3F4F6);
-        field.setTextSize(18);
+        field.setTextColor(UI_PALE);
+        field.setTextSize(16);
         field.setPadding(0, 5, 0, 0);
         field.setBackgroundColor(android.graphics.Color.TRANSPARENT);
         card.addView(field);
@@ -2704,7 +1702,7 @@ public class MainActivity extends Activity {
 
         TextView labelView = new TextView(this);
         labelView.setText(label);
-        labelView.setTextColor(0xFF9297A2);
+        labelView.setTextColor(UI_MUTED);
         labelView.setTextSize(13);
         card.addView(labelView);
 
@@ -2712,15 +1710,15 @@ public class MainActivity extends Activity {
         field.setText(Integer.toString(value));
         field.setInputType(InputType.TYPE_CLASS_NUMBER);
         field.setSelectAllOnFocus(true);
-        field.setTextColor(0xFFF3F4F6);
-        field.setTextSize(18);
+        field.setTextColor(UI_PALE);
+        field.setTextSize(16);
         field.setPadding(0, 5, 0, 0);
         field.setBackgroundColor(android.graphics.Color.TRANSPARENT);
         card.addView(field);
 
         TextView explanationView = new TextView(this);
         explanationView.setText(explanation);
-        explanationView.setTextColor(0xFF747985);
+        explanationView.setTextColor(UI_CHARCOAL);
         explanationView.setTextSize(12);
         explanationView.setPadding(0, 3, 0, 0);
         card.addView(explanationView);
@@ -2738,7 +1736,7 @@ public class MainActivity extends Activity {
         Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT)
                 .addCategory(Intent.CATEGORY_OPENABLE)
                 .setType("application/json")
-                .putExtra(Intent.EXTRA_TITLE, "ssh-tunnel-config.sshtunnel.json");
+                .putExtra(Intent.EXTRA_TITLE, "pelmeni-vpn-config.json");
         startActivityForResult(intent, REQUEST_EXPORT);
     }
 
@@ -2756,13 +1754,13 @@ public class MainActivity extends Activity {
             SecureStore store = new SecureStore(this);
             ServerProfiles.Profile active = ServerProfiles.active(store);
             JSONObject config = new JSONObject()
-                    .put("format", 1)
+                    .put("format", 2)
+                    .put("type", "pelmeni_vpn_server")
                     .put("name", active == null ? host.getText().toString().trim()
                             : active.name)
                     .put("host", host.getText().toString().trim())
                     .put("ssh_port", Integer.parseInt(sshPort.getText().toString().trim()))
                     .put("username", user.getText().toString().trim())
-                    .put("password", password.getText().toString())
                     .put("socks_port", Integer.parseInt(socksPort.getText().toString().trim()))
                     .put("vpn_mode", enableVpn.isChecked())
                     .put("telegram_proxy", enableTelegram.isChecked())
@@ -2771,10 +1769,11 @@ public class MainActivity extends Activity {
                     .put("ssh_window_kib", NetworkTuning.windowKiB(store))
                     .put("ssh_packet_kib", NetworkTuning.packetKiB(store))
                     .put("vpn_mtu", NetworkTuning.vpnMtu(store))
-                    .put("contains_plaintext_password", true);
+                    .put("requires_password", true);
+            ConfigSecurity.verifySafeExport(config);
             output.write(config.toString(2).getBytes(StandardCharsets.UTF_8));
             Toast.makeText(this,
-                    "Конфигурация сохранена. В файле находится пароль — передавай его только доверенному человеку.",
+                    "Конфигурация сохранена без пароля.",
                     Toast.LENGTH_LONG).show();
             Intent share = new Intent(Intent.ACTION_SEND)
                     .setType("application/json")
@@ -2798,12 +1797,18 @@ public class MainActivity extends Activity {
                 bytes.write(buffer, 0, count);
             }
             JSONObject config = new JSONObject(bytes.toString(StandardCharsets.UTF_8.name()));
-            if (config.optInt("format", -1) != 1) throw new Exception("Unsupported format");
+            int format = config.optInt("format", -1);
+            if (format != 1 && format != 2) throw new Exception("Unsupported format");
+            if (format == 2
+                    && !"pelmeni_vpn_server".equals(config.optString("type"))) {
+                throw new Exception("Unsupported config type");
+            }
 
             String importedHost = config.getString("host").trim();
             String importedPort = Integer.toString(config.getInt("ssh_port"));
             String importedUser = config.getString("username").trim();
-            String importedPassword = config.getString("password");
+            String importedPassword = format == 1
+                    ? config.optString("password", "") : "";
             String importedSocksPort = Integer.toString(config.getInt("socks_port"));
             int importedWindow = config.optInt(
                     "ssh_window_kib", NetworkTuning.DEFAULT_WINDOW_KIB);
@@ -2811,7 +1816,8 @@ public class MainActivity extends Activity {
                     "ssh_packet_kib", NetworkTuning.DEFAULT_PACKET_KIB);
             int importedMtu = config.optInt("vpn_mtu", NetworkTuning.DEFAULT_MTU);
             if (!validHost(importedHost) || !validPort(importedPort)
-                    || importedUser.isEmpty() || importedPassword.isEmpty()
+                    || importedUser.isEmpty()
+                    || (format == 1 && importedPassword.isEmpty())
                     || !validPort(importedSocksPort)
                     || !NetworkTuning.valid(importedWindow,
                     NetworkTuning.MIN_WINDOW_KIB, NetworkTuning.MAX_WINDOW_KIB)
@@ -2829,16 +1835,25 @@ public class MainActivity extends Activity {
                     importedName, importedHost, importedPort, importedUser,
                     importedSocksPort, importedWindow, importedPacket, importedMtu);
             ServerProfiles.saveAndActivate(store, importedProfile, importedPassword);
-            loadSettings();
-            autoReconnect.setChecked(config.optBoolean("auto_reconnect", true));
-            startOnBoot.setChecked(config.optBoolean("start_on_boot", false));
+            store.putBoolean("auto_reconnect",
+                    config.optBoolean("auto_reconnect", true));
+            store.putBoolean("start_on_boot",
+                    config.optBoolean("start_on_boot", false));
             boolean importedVpn = config.optBoolean("vpn_mode", false);
-            enableVpn.setChecked(importedVpn);
-            enableTelegram.setChecked(config.optBoolean("telegram_proxy", !importedVpn));
-            if (!saveSettings()) throw new Exception("Could not save config");
+            store.putBoolean("vpn_mode", importedVpn);
+            store.putBoolean("telegram_proxy",
+                    config.optBoolean("telegram_proxy", !importedVpn));
             loadSettings();
-            Toast.makeText(this, "Конфигурация импортирована", Toast.LENGTH_SHORT).show();
-            maybeOfferTlsForCurrentServer(null);
+            if (importedPassword.isEmpty()) {
+                Toast.makeText(this,
+                        "Конфигурация импортирована. Введи пароль сервера.",
+                        Toast.LENGTH_LONG).show();
+                showServerEditor(importedProfile);
+            } else {
+                Toast.makeText(this, "Конфигурация импортирована",
+                        Toast.LENGTH_SHORT).show();
+                maybeOfferTlsForCurrentServer(null);
+            }
         } catch (Exception error) {
             Toast.makeText(this, "Файл конфигурации повреждён или несовместим", Toast.LENGTH_LONG).show();
         }
@@ -2879,33 +1894,6 @@ public class MainActivity extends Activity {
                 intent.getLongExtra("session_downloaded", 0),
                 intent.getLongExtra("total_uploaded", 0),
                 intent.getLongExtra("total_downloaded", 0));
-        updateAccessLimitSummary();
-        if (Branding.isSecret(this) && intent.getBooleanExtra("debug_enabled", false)) {
-            debugInfo.setText("Версия: " + intent.getStringExtra("debug_version")
-                    + "\nПрофиль: " + intent.getStringExtra("debug_profile")
-                    + "\nСтатус: " + intent.getStringExtra("debug_status")
-                    + "\nSSH: "
-                    + (intent.getBooleanExtra("debug_ssh_connected", false)
-                    ? "соединение установлено" : "нет соединения")
-                    + " · сеансов: " + intent.getIntExtra("debug_ssh_sessions", 1)
-                    + "\nАдрес: " + intent.getStringExtra("debug_ssh_endpoint")
-                    + "\nТранспорт: " + intent.getStringExtra("debug_transport")
-                    + "\nРежим: " + intent.getStringExtra("debug_mode")
-                    + "\nСеть: " + intent.getStringExtra("debug_network")
-                    + "\nРабочие SOCKS: "
-                    + intent.getStringExtra("debug_socks_ports")
-                    + "\nTG / VPN: "
-                    + yesNo(intent.getBooleanExtra("debug_tg_running", false))
-                    + " / " + yesNo(intent.getBooleanExtra("debug_vpn_running", false))
-                    + "\nАвтопереподключение: "
-                    + yesNo(intent.getBooleanExtra("debug_auto_reconnect", true))
-                    + "\nОкно/пакет/MTU: "
-                    + intent.getStringExtra("debug_tuning")
-                    + "\nВремя работы: "
-                    + formatDuration(intent.getLongExtra("debug_uptime_ms", 0))
-                    + "\nПопытки подключения: "
-                    + intent.getIntExtra("debug_connect_attempts", 0));
-        }
     }
 
     private void updateStatsValues(long speed, int ping, long sessionUp, long sessionDown,
@@ -2922,18 +1910,6 @@ public class MainActivity extends Activity {
         return formatBytes(bytesPerSecond) + "/с";
     }
 
-    private String limitResetCountdown(long issuedAt, boolean monthly) {
-        long resetAt = UserAccessPolicy.nextResetAt(issuedAt, monthly);
-        long minutes = Math.max(0,
-                (resetAt - System.currentTimeMillis() / 1000L + 59) / 60);
-        long days = minutes / (24 * 60);
-        long hours = (minutes / 60) % 24;
-        long remainingMinutes = minutes % 60;
-        if (days > 0) return "через " + days + " д " + hours + " ч";
-        if (hours > 0) return "через " + hours + " ч " + remainingMinutes + " мин";
-        return "через " + remainingMinutes + " мин";
-    }
-
     private String formatBytes(long bytes) {
         if (bytes < 1024) return bytes + " Б";
         double value = bytes;
@@ -2947,52 +1923,89 @@ public class MainActivity extends Activity {
         return bytes + " Б";
     }
 
-    private String formatDuration(long millis) {
-        long seconds = Math.max(0, millis / 1000);
-        return String.format(Locale.getDefault(), "%02d:%02d:%02d",
-                seconds / 3600, (seconds / 60) % 60, seconds % 60);
-    }
-
-    private void updateDebugPanel() {
-        boolean secret = Branding.isSecret(this);
-        findViewById(R.id.debugPanel).setVisibility(secret ? View.VISIBLE : View.GONE);
-        if (secret && !running) {
-            SecureStore store = new SecureStore(this);
-            String configuredHost = store.getPlain("host", "").trim();
-            debugInfo.setText("Версия: " + BuildConfig.VERSION_NAME
-                    + "\nСтатус: сервис отключён"
-                    + "\nРежим: " + TunnelMode.label(store)
-                    + "\nTLS: " + yesNo(TlsTransport.isEnabledFor(store, configuredHost))
-                    + "\nАвтопереподключение: "
-                    + yesNo(store.getBoolean("auto_reconnect", true))
-                    + "\nОкно/пакет/MTU: " + NetworkTuning.windowKiB(store) + "/"
-                    + NetworkTuning.packetKiB(store) + "/"
-                    + NetworkTuning.vpnMtu(store));
-        }
-    }
-
-    private String yesNo(boolean value) {
-        return value ? "да" : "нет";
-    }
-
     private void startTunnel() {
         if (ServerProfiles.active(new SecureStore(this)) == null) {
-            showAddServerChoice();
-            return;
-        }
-        if (Branding.isSecretInput(
-                host.getText().toString(), password.getText().toString())) {
-            boolean enabled = Branding.toggleSecret(this);
-            appTitle.setText(Branding.appName(this));
-            updateDebugPanel();
-            Toast.makeText(this, enabled
-                    ? "Huyna VPN debug mode activated"
-                    : "Возвращено название «Пельмени VPN»", Toast.LENGTH_LONG).show();
+            showServerEditor(null);
             return;
         }
         if (!saveSettings()) return;
-        if (maybeOfferTlsForCurrentServer(this::continueStartTunnel)) return;
-        continueStartTunnel();
+        ensureSshHostKey(() -> {
+            if (maybeOfferTlsForCurrentServer(this::continueStartTunnel)) return;
+            continueStartTunnel();
+        });
+    }
+
+    private void ensureSshHostKey(Runnable onVerified) {
+        if (hostKeyCheckRunning) {
+            Toast.makeText(this, "Проверка ключа SSH уже выполняется",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        hostKeyCheckRunning = true;
+        Toast.makeText(this, "Проверяем ключ SSH-сервера…",
+                Toast.LENGTH_SHORT).show();
+        speedWorker.execute(() -> {
+            try {
+                SecureStore store = new SecureStore(this);
+                String previousFingerprint = SshHostKeys.trustedFingerprint(store);
+                SshHostKeys.ScannedKey scanned = SshHostKeys.scan(store);
+                boolean trusted = SshHostKeys.isTrusted(store, scanned);
+                runOnUiThread(() -> {
+                    hostKeyCheckRunning = false;
+                    if (isFinishing() || isDestroyed()) return;
+                    if (trusted) {
+                        onVerified.run();
+                        return;
+                    }
+                    boolean changed = !previousFingerprint.isEmpty();
+                    String message = "Сервер: " + scanned.host + ":" + scanned.port
+                            + "\nТип ключа: " + scanned.type
+                            + "\nНовый fingerprint:\n" + scanned.fingerprint;
+                    if (changed) {
+                        message += "\n\nРанее сохранённый fingerprint:\n"
+                                + previousFingerprint
+                                + "\n\nКлюч сервера изменился. Это может означать "
+                                + "переустановку VPS или попытку перехвата. Продолжай "
+                                + "только после независимой проверки fingerprint.";
+                    } else {
+                        message += "\n\nСверь fingerprint с сервером или его владельцем. "
+                                + "Пароль не будет отправлен до подтверждения.";
+                    }
+                    new AlertDialog.Builder(this)
+                            .setTitle(changed
+                                    ? "Ключ SSH-сервера изменился"
+                                    : "Подтверди ключ SSH-сервера")
+                            .setMessage(message)
+                            .setPositiveButton(changed
+                                    ? "Заменить ключ" : "Доверять",
+                                    (ignored, which) -> {
+                                        try {
+                                            SshHostKeys.trust(
+                                                    new SecureStore(this), scanned);
+                                            onVerified.run();
+                                        } catch (Exception error) {
+                                            Toast.makeText(this,
+                                                    "Не удалось сохранить ключ SSH",
+                                                    Toast.LENGTH_LONG).show();
+                                        }
+                                    })
+                            .setNegativeButton("Отмена", null)
+                            .show();
+                });
+            } catch (Exception error) {
+                runOnUiThread(() -> {
+                    hostKeyCheckRunning = false;
+                    if (isFinishing() || isDestroyed()) return;
+                    new AlertDialog.Builder(this)
+                            .setTitle("Не удалось проверить ключ SSH")
+                            .setMessage(error.getMessage() == null
+                                    ? "Сервер не ответил на безопасную проверку."
+                                    : error.getMessage())
+                            .setPositiveButton("Понятно", null)
+                            .show();
+                });
+            }
+        });
     }
 
     private void continueStartTunnel() {
@@ -3008,8 +2021,6 @@ public class MainActivity extends Activity {
         Intent intent = new Intent(this, TunnelService.class).setAction(TunnelService.START);
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent);
         else startService(intent);
-        proxyConnecting = true;
-        vpnConnecting = false;
         update("Подключение…");
     }
 
@@ -3048,30 +2059,8 @@ public class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        IntentResult qrResult =
-                IntentIntegrator.parseActivityResult(requestCode, resultCode, data);
-        if (qrResult != null) {
-            if (qrResult.getContents() != null) {
-                importAccessCode(qrResult.getContents());
-            }
-            return;
-        }
         if (requestCode == REQUEST_VPN && resultCode == RESULT_OK) {
-            if (pendingLiveVpnPermission && running) {
-                pendingLiveVpnPermission = false;
-                reconfigureRunningModes();
-            } else {
-                pendingLiveVpnPermission = false;
-                startVpnTunnel();
-            }
-        } else if (requestCode == REQUEST_VPN) {
-            pendingLiveVpnPermission = false;
-            waitingForVpnReady = false;
-            suppressModeChanges = true;
-            enableVpn.setChecked(false);
-            suppressModeChanges = false;
-            new SecureStore(this).putBoolean("vpn_mode", false);
-            updateModeButtons();
+            startVpnTunnel();
         } else if (requestCode == REQUEST_EXPORT && resultCode == RESULT_OK && data != null) {
             writeConfig(data.getData());
         } else if (requestCode == REQUEST_IMPORT && resultCode == RESULT_OK && data != null) {
@@ -3086,9 +2075,6 @@ public class MainActivity extends Activity {
     }
 
     private void startVpnTunnel() {
-        waitingForVpnReady = true;
-        proxyConnecting = enableTelegram.isChecked();
-        vpnConnecting = true;
         Intent sshIntent = new Intent(this, TunnelService.class).setAction(TunnelService.START);
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(sshIntent);
         else startService(sshIntent);
@@ -3100,53 +2086,6 @@ public class MainActivity extends Activity {
         update("Starting VPN...");
     }
 
-    private void applyLiveModeChange(boolean vpnChanged, boolean checked) {
-        if (!enableVpn.isChecked() && !enableTelegram.isChecked()) {
-            proxyConnecting = false;
-            vpnConnecting = false;
-            if (running) stopTunnel();
-            else update("Отключено");
-            return;
-        }
-        if (!running) {
-            if (checked) startTunnel();
-            return;
-        }
-        if (vpnChanged) vpnConnecting = checked;
-        else proxyConnecting = checked;
-        if (vpnChanged && checked) {
-            waitingForVpnReady = true;
-            Intent permission = VpnService.prepare(this);
-            if (permission != null) {
-                pendingLiveVpnPermission = true;
-                startActivityForResult(permission, REQUEST_VPN);
-                return;
-            }
-        }
-        reconfigureRunningModes();
-    }
-
-    private void reconfigureRunningModes() {
-        SecureStore store = new SecureStore(this);
-        if (!store.getBoolean("vpn_mode", false)) {
-            startService(new Intent(this, VpnTunnelService.class)
-                    .setAction(VpnTunnelService.STOP)
-                    .putExtra(VpnTunnelService.EXTRA_STOP_SSH, false));
-        }
-        Intent ssh = new Intent(this, TunnelService.class)
-                .setAction(TunnelService.RECONFIGURE);
-        if (Build.VERSION.SDK_INT >= 26) startForegroundService(ssh);
-        else startService(ssh);
-        if (store.getBoolean("vpn_mode", false)) {
-            Intent vpn = VpnTunnelService.includeRoutingSnapshot(
-                    new Intent(this, VpnTunnelService.class)
-                            .setAction(VpnTunnelService.START), store);
-            if (Build.VERSION.SDK_INT >= 26) startForegroundService(vpn);
-            else startService(vpn);
-        }
-        update("Переключаемся на " + TunnelMode.label(store) + "…");
-    }
-
     private void stopTunnel() {
         startService(new Intent(this, TunnelService.class).setAction(TunnelService.STOP));
         update("Отключено");
@@ -3156,53 +2095,38 @@ public class MainActivity extends Activity {
         if (text == null) return;
         status.setText(text);
         running = !text.equals("Отключено");
-        updateConnectionPhase(text);
-        toggle.setText(running ? "ОТКЛЮЧИТЬ" : "ПОДКЛЮЧИТЬ");
-        toggle.setActivated(running);
-        updateModeButtons();
+        toggle.setText(running ? "Отключить" : "Подключить");
+        boolean connectedNow = TunnelService.isConnected();
+        toggle.setActivated(connectedNow);
+        connectButtonDrawable.setConnecting(running && !connectedNow);
+        toggle.setTextColor(connectedNow ? UI_ACCENT : UI_PALE);
+        status.setTextColor(connectedNow ? UI_ACCENT
+                : running ? UI_PALE : UI_MUTED);
         setSettingsEnabled(!running);
-        updateDebugPanel();
+        updateDebugInfo();
     }
 
-    private void updateConnectionPhase(String text) {
-        if (text.equals("Отключено")) {
-            waitingForVpnReady = false;
-            proxyConnecting = false;
-            vpnConnecting = false;
-            routingApplying = false;
-            return;
-        }
-        if (text.startsWith("VPN подключён")) {
-            waitingForVpnReady = false;
-            vpnConnecting = false;
-            routingApplying = false;
-            return;
-        }
-        if (text.startsWith("Ошибка запуска VPN")
-                || text.startsWith("Android не разрешил")
-                || text.startsWith("SOCKS5 не запустился")) {
-            waitingForVpnReady = false;
-            vpnConnecting = false;
-            routingApplying = false;
-            return;
-        }
-        if (!enableVpn.isChecked()) {
-            waitingForVpnReady = false;
-            vpnConnecting = false;
-        }
-        if (text.startsWith("Подключено")) {
-            proxyConnecting = false;
-            routingApplying = waitingForVpnReady
-                    && SplitTunnel.enabled(new SecureStore(this));
-            if (!waitingForVpnReady) vpnConnecting = false;
-            return;
-        }
-        if (text.startsWith("Подключение")
-                || text.startsWith("Сервис запущен")
-                || text.contains("Повтор через")) {
-            proxyConnecting = enableTelegram.isChecked();
-            vpnConnecting = enableVpn.isChecked();
-        }
+    private void applyBranding() {
+        boolean developerMode = Branding.isDeveloperMode(this);
+        appTitle.setText(Branding.appName(this));
+        appTitle.setTextColor(developerMode ? 0xFFFF2DAA : UI_PALE);
+        appSubtitle.setText(developerMode
+                ? "INTERNAL NETWORK CONSOLE"
+                : "SSH-туннель с быстрым переключением серверов");
+        appSubtitle.setTextColor(developerMode ? 0xFF62D9FF : UI_MUTED);
+        debugPanel.setVisibility(developerMode ? View.VISIBLE : View.GONE);
+        updateDebugInfo();
+    }
+
+    private void updateDebugInfo() {
+        if (debugPanel == null || debugPanel.getVisibility() != View.VISIBLE) return;
+        SecureStore store = new SecureStore(this);
+        ServerProfiles.Profile profile = ServerProfiles.active(store);
+        debugInfo.setText("BUILD    " + BuildConfig.VERSION_NAME
+                + "\nSERVICE  " + (TunnelService.isConnected() ? "CONNECTED"
+                : TunnelService.isActive() ? "STARTING" : "OFFLINE")
+                + "\nPROFILE  " + (profile == null ? "NONE" : profile.name)
+                + "\nMODE     " + TunnelMode.label(store));
     }
 
     private void setSettingsEnabled(boolean enabled) {
@@ -3215,10 +2139,8 @@ public class MainActivity extends Activity {
         showPassword.setEnabled(enabled);
         autoReconnect.setEnabled(enabled);
         startOnBoot.setEnabled(enabled);
-        enableVpn.setEnabled(true);
-        enableTelegram.setEnabled(true);
-        toggleVpn.setEnabled(true);
-        toggleTelegram.setEnabled(true);
+        enableVpn.setEnabled(enabled);
+        enableTelegram.setEnabled(enabled);
         serverSelect.setEnabled(true);
         serverEdit.setEnabled(enabled);
     }

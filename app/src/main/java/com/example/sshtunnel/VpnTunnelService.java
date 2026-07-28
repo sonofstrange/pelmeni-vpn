@@ -6,6 +6,7 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
+import android.net.Network;
 import android.net.VpnService;
 import android.os.Build;
 import android.os.ParcelFileDescriptor;
@@ -25,12 +26,18 @@ public class VpnTunnelService extends VpnService {
     public static final String START = "vpn_start";
     public static final String STOP = "vpn_stop";
     public static final String RELOAD_ROUTES = "vpn_reload_routes";
+    public static final String RESTART_TRANSPORT = "vpn_restart_transport";
+    public static final String UPDATE_UNDERLYING_NETWORK =
+            "vpn_update_underlying_network";
     public static final String EXTRA_STOP_SSH = "stop_ssh";
     private static final String EXTRA_SPLIT_SNAPSHOT = "split_snapshot";
     private static final String EXTRA_SPLIT_ENABLED = "split_enabled";
     private static final String EXTRA_SPLIT_MODE = "split_mode";
     private static final String EXTRA_SPLIT_NAME = "split_name";
     private static final String EXTRA_SPLIT_ENTRIES = "split_entries";
+    private static final String EXTRA_UNDERLYING_NETWORK = "underlying_network";
+    private static final String EXTRA_UNDERLYING_AVAILABLE =
+            "underlying_network_available";
     private static final String CHANNEL = "tunnel";
     private static final int ID = 42;
 
@@ -38,6 +45,8 @@ public class VpnTunnelService extends VpnService {
     private volatile boolean starting;
     private volatile boolean stopping;
     private volatile boolean nativeStarted;
+    private volatile Network underlyingNetwork;
+    private volatile boolean underlyingUnavailable;
     private ParcelFileDescriptor tun;
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
@@ -49,13 +58,24 @@ public class VpnTunnelService extends VpnService {
             reloadRoutes(readRoutingSnapshot(intent));
             return START_STICKY;
         }
+        if (intent != null
+                && UPDATE_UNDERLYING_NETWORK.equals(intent.getAction())) {
+            applyUnderlyingNetwork(intent);
+            if (tun == null && !starting) startVpn(null);
+            return START_STICKY;
+        }
+        if (intent != null && RESTART_TRANSPORT.equals(intent.getAction())) {
+            applyUnderlyingNetwork(intent);
+            restartTransport(readRoutingSnapshot(intent));
+            return START_STICKY;
+        }
         if (tun == null && !starting) startVpn(readRoutingSnapshot(intent));
         return START_STICKY;
     }
 
     public static Intent includeRoutingSnapshot(Intent intent, SecureStore store) {
         boolean enabled = SplitTunnel.enabled(store);
-        SplitTunnel.Profile profile = SplitTunnel.combined(store);
+        SplitTunnel.Profile profile = SplitTunnel.active(store);
         intent.putExtra(EXTRA_SPLIT_SNAPSHOT, true)
                 .putExtra(EXTRA_SPLIT_ENABLED, enabled);
         if (profile != null) {
@@ -65,6 +85,31 @@ public class VpnTunnelService extends VpnService {
                             new ArrayList<>(profile.entries));
         }
         return intent;
+    }
+
+    static Intent includeUnderlyingNetwork(Intent intent, Network network) {
+        intent.putExtra(EXTRA_UNDERLYING_AVAILABLE, network != null);
+        if (network != null) intent.putExtra(EXTRA_UNDERLYING_NETWORK, network);
+        return intent;
+    }
+
+    @SuppressWarnings("deprecation")
+    private void applyUnderlyingNetwork(Intent intent) {
+        boolean available =
+                intent.getBooleanExtra(EXTRA_UNDERLYING_AVAILABLE, false);
+        Network network = null;
+        if (available) {
+            network = Build.VERSION.SDK_INT >= 33
+                    ? intent.getParcelableExtra(
+                            EXTRA_UNDERLYING_NETWORK, Network.class)
+                    : intent.getParcelableExtra(EXTRA_UNDERLYING_NETWORK);
+        }
+        underlyingNetwork = network;
+        underlyingUnavailable = network == null;
+        if (tun != null) {
+            setUnderlyingNetworks(network == null
+                    ? new Network[0] : new Network[] {network});
+        }
     }
 
     private RoutingSnapshot readRoutingSnapshot(Intent intent) {
@@ -88,6 +133,23 @@ public class VpnTunnelService extends VpnService {
             int socksPort = TunnelMode.vpnSocksPort(new SecureStore(this));
             if (!waitForSocks(socksPort)) {
                 send("SOCKS5 не запустился — VPN остановлен");
+                stopVpn(true);
+                return;
+            }
+            establishVpn(socksPort, snapshot);
+        });
+    }
+
+    private synchronized void restartTransport(RoutingSnapshot snapshot) {
+        if (starting || stopping) return;
+        starting = true;
+        startAsForeground("VPN: обновляем транспорт после смены сети…");
+        worker.execute(() -> {
+            if (stopping) return;
+            cleanupNative();
+            int socksPort = TunnelMode.vpnSocksPort(new SecureStore(this));
+            if (!waitForSocks(socksPort)) {
+                send("SOCKS5 не запустился после смены сети — VPN остановлен");
                 stopVpn(true);
                 return;
             }
@@ -121,6 +183,13 @@ public class VpnTunnelService extends VpnService {
                     .setMtu(mtu)
                     .setBlocking(false)
                     .addAddress("198.18.0.1", 32);
+            Network currentUnderlying = underlyingNetwork;
+            if (currentUnderlying != null) {
+                builder.setUnderlyingNetworks(
+                        new Network[] {currentUnderlying});
+            } else if (underlyingUnavailable) {
+                builder.setUnderlyingNetworks(new Network[0]);
+            }
             routing.apply(builder);
             try {
                 builder.addDisallowedApplication(getPackageName());
@@ -243,7 +312,7 @@ public class VpnTunnelService extends VpnService {
         PendingIntent stopIntent = PendingIntent.getService(this, 1, stop,
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
         return new Notification.Builder(this, CHANNEL)
-                .setSmallIcon(android.R.drawable.stat_sys_upload_done)
+                .setSmallIcon(QuickSettingsTileService.iconResource(this))
                 .setContentTitle(Branding.appName(this) + " · "
                         + TunnelMode.label(new SecureStore(this)))
                 .setContentText(text)

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Palette adapted from the public Amnezia UI design tokens. -->
+    <color name="amnezia_midnight">#0E0E11</color>
+    <color name="amnezia_onyx">#1C1D21</color>
+    <color name="amnezia_slate">#2C2D30</color>
+    <color name="amnezia_charcoal">#494B50</color>
+    <color name="amnezia_muted">#878B91</color>
+    <color name="amnezia_light">#C1C2C5</color>
+    <color name="amnezia_pale">#D7D8DB</color>
+    <color name="amnezia_accent">#FBB26A</color>
+    <color name="amnezia_red">#EB5757</color>
+    <color name="amnezia_violet">#A87BE2</color>
+</resources>

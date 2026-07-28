@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">Pelmeni Dev Control</string>
+    <string name="title">Developer branding</string>
+    <string name="enable">Enable Huyna debug</string>
+    <string name="disable">Return Pelmeni branding</string>
+    <string name="toggle">Toggle branding</string>
+    <string name="sent">Command sent</string>
+</resources>

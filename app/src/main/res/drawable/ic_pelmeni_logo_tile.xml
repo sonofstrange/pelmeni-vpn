@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Ruffled dumpling silhouette from the application logo. -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:pathData="M3.1,12.6C3.1,8.1 5.2,4.9 8.6,3.5C9.8,3 10.5,3.9 12,2.6C13.5,3.9 14.2,3 15.4,3.5C18.8,4.9 20.9,8.1 20.9,12.6C20.9,18 17.2,21.2 12,21.2C6.8,21.2 3.1,18 3.1,12.6zM4.4,8.4C5.2,8.9 5.8,8.6 6.5,7.5C7.2,6.4 8,6.8 8.8,5.8C9.7,4.8 10.6,5.5 12,4.1C13.4,5.5 14.3,4.8 15.2,5.8C16,6.8 16.8,6.4 17.5,7.5C18.2,8.6 18.8,8.9 19.6,8.4"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="1.7" />
+    <!-- Face details make the tile match the launcher character. -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M7.7,10.4a1,1 0,1 0,2 0a1,1 0,1 0,-2 0M14.3,10.4a1,1 0,1 0,2 0a1,1 0,1 0,-2 0" />
+    <path
+        android:fillColor="@android:color/transparent"
+        android:pathData="M10.3,12.2C10.7,13 11.2,13.3 12,13.3C12.8,13.3 13.3,13 13.7,12.2M9.5,16.2V15.1C9.5,13.8 10.5,13 12,13C13.5,13 14.5,13.8 14.5,15.1V16.2M8.8,16.2H15.2V19H8.8z"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="1.35" />
+</vector>

@@ -1,0 +1,10 @@
+<resources>
+    <style name="Theme.DevControl" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#FF2DAA</item>
+        <item name="android:windowBackground">#101114</item>
+        <item name="android:textColorPrimary">#F3F4F6</item>
+        <item name="android:navigationBarColor">#101114</item>
+        <item name="android:statusBarColor">#101114</item>
+    </style>
+</resources>

@@ -1,7 +1,6 @@
 package com.example.sshtunnel;
 
 import com.jcraft.jsch.ChannelExec;
-import com.jcraft.jsch.JSch;
 import com.jcraft.jsch.Session;
 
 import java.io.ByteArrayInputStream;
@@ -34,10 +33,10 @@ final class ServerTlsSetup {
             throw new Exception("Сначала сохрани адрес, пользователя и пароль сервера.");
         }
 
-        Session session = new JSch().getSession(user, host, sshPort);
+        Session session = SshHostKeys.newPinnedSession(
+                store, user, host, sshPort);
         session.setPassword(password);
         session.setSocketFactory(new LowLatencySocketFactory(null));
-        session.setConfig("StrictHostKeyChecking", "no");
         session.setConfig("PreferredAuthentications", "password,keyboard-interactive");
         session.connect(15_000);
         try {
@@ -77,10 +76,10 @@ final class ServerTlsSetup {
         String user = store.getPlain("user", "root").trim();
         String password = store.getSecret();
         int sshPort = parsePort(store.getPlain("port", "22"), 22);
-        Session session = new JSch().getSession(user, host, sshPort);
+        Session session = SshHostKeys.newPinnedSession(
+                store, user, host, sshPort);
         session.setPassword(password);
         session.setSocketFactory(TlsTransport.socketFactory(store, null));
-        session.setConfig("StrictHostKeyChecking", "no");
         session.setConfig("PreferredAuthentications", "password,keyboard-interactive");
         try {
             session.connect(20_000);
@@ -157,10 +156,10 @@ final class ServerTlsSetup {
         String user = store.getPlain("user", "root").trim();
         String password = store.getSecret();
         int sshPort = parsePort(store.getPlain("port", "22"), 22);
-        Session session = new JSch().getSession(user, host, sshPort);
+        Session session = SshHostKeys.newPinnedSession(
+                store, user, host, sshPort);
         session.setPassword(password);
         session.setSocketFactory(new LowLatencySocketFactory(null));
-        session.setConfig("StrictHostKeyChecking", "no");
         session.setConfig("PreferredAuthentications", "password,keyboard-interactive");
         session.connect(15_000);
         return session;

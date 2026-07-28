@@ -11,6 +11,8 @@ import java.util.UUID;
 final class ServerProfiles {
     private static final String PROFILES_KEY = "server_profiles";
     private static final String ACTIVE_KEY = "active_server_profile";
+    private static final String PERFORMANCE_MIGRATION_KEY =
+            "performance_defaults_v2";
 
     static final class Profile {
         final String id;
@@ -54,6 +56,38 @@ final class ServerProfiles {
         store.putPlain(ACTIVE_KEY, profile.id);
         putPassword(store, profile.id, store.getSecret());
         TlsTransport.snapshotForProfile(store, profile.id);
+    }
+
+    /**
+     * Moves profiles that still use the exact old balanced preset to the larger
+     * receive window. Custom tuning is left untouched.
+     */
+    static void migratePerformanceDefaults(SecureStore store) {
+        if (store.getBoolean(PERFORMANCE_MIGRATION_KEY, false)) return;
+        List<Profile> profiles = list(store);
+        String activeId = store.getPlain(ACTIVE_KEY, "");
+        boolean changed = false;
+        boolean activeChanged = false;
+        for (int i = 0; i < profiles.size(); i++) {
+            Profile profile = profiles.get(i);
+            if (profile.windowKiB == NetworkTuning.LEGACY_WINDOW_KIB
+                    && profile.packetKiB == NetworkTuning.DEFAULT_PACKET_KIB
+                    && profile.mtu == NetworkTuning.DEFAULT_MTU) {
+                profiles.set(i, new Profile(profile.id, profile.name, profile.host,
+                        profile.sshPort, profile.user, profile.socksPort,
+                        NetworkTuning.DEFAULT_WINDOW_KIB, profile.packetKiB, profile.mtu));
+                changed = true;
+                activeChanged |= profile.id.equals(activeId);
+            }
+        }
+        if (changed) write(store, profiles);
+        if (activeChanged || (profiles.isEmpty()
+                && Integer.toString(NetworkTuning.LEGACY_WINDOW_KIB).equals(
+                store.getPlain("ssh_window_kib", "")))) {
+            store.putPlain("ssh_window_kib",
+                    Integer.toString(NetworkTuning.DEFAULT_WINDOW_KIB));
+        }
+        store.putBoolean(PERFORMANCE_MIGRATION_KEY, true);
     }
 
     static List<Profile> list(SecureStore store) {
@@ -110,6 +144,11 @@ final class ServerProfiles {
         boolean replaced = false;
         for (int i = 0; i < profiles.size(); i++) {
             if (profiles.get(i).id.equals(profile.id)) {
+                Profile previous = profiles.get(i);
+                if (!previous.host.equalsIgnoreCase(profile.host)
+                        || !previous.sshPort.equals(profile.sshPort)) {
+                    SshHostKeys.clearProfile(store, profile.id);
+                }
                 profiles.set(i, profile);
                 replaced = true;
                 break;
@@ -147,6 +186,10 @@ final class ServerProfiles {
             throws Exception {
         Profile active = active(store);
         if (active == null) return;
+        if (!active.host.equalsIgnoreCase(host)
+                || !active.sshPort.equals(sshPort)) {
+            SshHostKeys.clearProfile(store, active.id);
+        }
         Profile updated = new Profile(active.id, active.name, host, sshPort, user,
                 socksPort, active.windowKiB, active.packetKiB, active.mtu);
         replace(store, updated);
@@ -170,6 +213,7 @@ final class ServerProfiles {
         profiles.removeIf(profile -> profile.id.equals(id));
         write(store, profiles);
         store.removeEncrypted(passwordKey(id));
+        SshHostKeys.clearProfile(store, id);
         TlsTransport.deleteProfileState(store, id);
         if (activeId.equals(id)) {
             Profile next = profiles.get(0);

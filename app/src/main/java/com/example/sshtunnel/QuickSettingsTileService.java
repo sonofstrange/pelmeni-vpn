@@ -1,6 +1,7 @@
 package com.example.sshtunnel;
 
 import android.app.PendingIntent;
+import android.content.Context;
 import android.content.Intent;
 import android.graphics.drawable.Icon;
 import android.net.VpnService;
@@ -9,6 +10,12 @@ import android.service.quicksettings.Tile;
 import android.service.quicksettings.TileService;
 
 public class QuickSettingsTileService extends TileService {
+    static int iconResource(Context context) {
+        return Branding.isDeveloperMode(context)
+                ? R.drawable.ic_huyna_tile
+                : R.drawable.ic_pelmeni_logo_tile_from_svg;
+    }
+
     @Override public void onStartListening() {
         super.onStartListening();
         updateTile();
@@ -43,6 +50,7 @@ public class QuickSettingsTileService extends TileService {
         updateTile();
     }
 
+    @android.annotation.SuppressLint("StartActivityAndCollapseDeprecated")
     private void openAppForVpnPermission() {
         Intent intent = new Intent(this, MainActivity.class)
                 .putExtra(MainActivity.EXTRA_START_FROM_TILE, true)
@@ -63,7 +71,7 @@ public class QuickSettingsTileService extends TileService {
         boolean enabled = store.getBoolean("enabled", false) && TunnelService.isActive();
         boolean connected = enabled && TunnelService.isConnected();
         tile.setState(connected ? Tile.STATE_ACTIVE : Tile.STATE_INACTIVE);
-        tile.setIcon(Icon.createWithResource(this, R.drawable.ic_pelmeni_tile));
+        tile.setIcon(Icon.createWithResource(this, iconResource(this)));
         String name = Branding.appName(this);
         if (Build.VERSION.SDK_INT >= 29) {
             tile.setLabel(name);

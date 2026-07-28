@@ -67,6 +67,7 @@ public class MainActivity extends Activity {
     private static final int REQUEST_IMPORT = 21;
     private static final int REQUEST_SPLIT_EXPORT = 22;
     private static final int REQUEST_SPLIT_IMPORT = 23;
+    private static final int REQUEST_INSTALL_UPDATES = 24;
     private static final long UPDATE_INTERVAL_MS = 24 * 60 * 60 * 1000L;
 
     private EditText host, sshPort, user, password, socksPort;
@@ -99,6 +100,7 @@ public class MainActivity extends Activity {
     private volatile boolean serverSetupRunning;
     private volatile boolean updateCheckRunning;
     private volatile boolean hostKeyCheckRunning;
+    private UpdateChecker.Result pendingUpdate;
     private final ExecutorService speedWorker = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
@@ -1793,21 +1795,131 @@ public class MainActivity extends Activity {
                         + result.version)
                 .setMessage("Установлена версия " + BuildConfig.VERSION_NAME + size
                         + "\n\n" + notes
-                        + "\n\nAndroid попросит подтвердить установку обновления.")
-                .setPositiveButton("Скачать APK", (ignored, which) -> {
-                    try {
-                        startActivity(new Intent(Intent.ACTION_VIEW,
-                                Uri.parse(result.downloadUrl)));
-                    } catch (Exception error) {
-                        startActivity(new Intent(Intent.ACTION_VIEW,
-                                Uri.parse(result.pageUrl)));
-                    }
-                })
+                        + (result.canInstallSecurely()
+                        ? "\n\nПеред установкой приложение проверит SHA-256, "
+                                + "имя пакета и сертификат APK."
+                        : "\n\nВ релизе нет проверяемого SHA-256, "
+                                + "поэтому доступна только его страница."))
+                .setPositiveButton(result.canInstallSecurely()
+                                ? "Проверить и установить" : "Открыть релиз",
+                        (ignored, which) -> {
+                            if (result.canInstallSecurely()) {
+                                prepareVerifiedUpdate(result);
+                            } else {
+                                startActivity(new Intent(Intent.ACTION_VIEW,
+                                        Uri.parse(result.pageUrl)));
+                            }
+                        })
                 .setNeutralButton("Страница релиза", (ignored, which) ->
                         startActivity(new Intent(Intent.ACTION_VIEW,
                                 Uri.parse(result.pageUrl))))
                 .setNegativeButton("Позже", null)
                 .show();
+    }
+
+    private void prepareVerifiedUpdate(UpdateChecker.Result result) {
+        if (Build.VERSION.SDK_INT >= 26
+                && !getPackageManager().canRequestPackageInstalls()) {
+            pendingUpdate = result;
+            new AlertDialog.Builder(this)
+                    .setTitle("Разрешить установку обновлений")
+                    .setMessage("Android требует один раз разрешить Пельмени VPN "
+                            + "открывать проверенные APK. Само обновление всё равно "
+                            + "потребует отдельного подтверждения.")
+                    .setPositiveButton("Открыть настройки",
+                            (ignored, which) -> {
+                                try {
+                                    startActivityForResult(new Intent(
+                                            Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                            Uri.parse("package:" + getPackageName())),
+                                            REQUEST_INSTALL_UPDATES);
+                                } catch (Exception error) {
+                                    pendingUpdate = null;
+                                    Toast.makeText(this,
+                                            "Не удалось открыть системное разрешение",
+                                            Toast.LENGTH_LONG).show();
+                                }
+                            })
+                    .setNegativeButton("Отмена", (ignored, which) ->
+                            pendingUpdate = null)
+                    .show();
+            return;
+        }
+        downloadVerifiedUpdate(result);
+    }
+
+    private void downloadVerifiedUpdate(UpdateChecker.Result result) {
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(24), dp(12), dp(24), dp(8));
+        TextView label = new TextView(this);
+        label.setText("Скачивание с GitHub…");
+        label.setTextSize(15);
+        content.addView(label);
+        ProgressBar bar = new ProgressBar(
+                this, null, android.R.attr.progressBarStyleHorizontal);
+        bar.setMax(100);
+        LinearLayout.LayoutParams barParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(18));
+        barParams.topMargin = dp(12);
+        content.addView(bar, barParams);
+        AlertDialog progress = new AlertDialog.Builder(this)
+                .setTitle("Проверенное обновление " + result.version)
+                .setView(content)
+                .setCancelable(false)
+                .create();
+        progress.show();
+
+        speedWorker.execute(() -> {
+            try {
+                File apk = ApkUpdateInstaller.downloadAndVerify(
+                        this, new SecureStore(this), result,
+                        percent -> mainHandler.post(() -> {
+                            bar.setProgress(percent);
+                            label.setText(percent < 100
+                                    ? "Скачивание: " + percent + "%"
+                                    : "Проверка APK завершена");
+                        }));
+                mainHandler.post(() -> {
+                    progress.dismiss();
+                    if (isFinishing() || isDestroyed()) return;
+                    new AlertDialog.Builder(this)
+                            .setTitle("Обновление проверено")
+                            .setMessage("SHA-256 совпал.\n"
+                                    + "Имя приложения совпало.\n"
+                                    + "Сертификат подписи совпал.\n\n"
+                                    + "Теперь Android попросит подтвердить установку.")
+                            .setPositiveButton("Установить",
+                                    (ignored, which) -> {
+                                        try {
+                                            ApkUpdateInstaller.install(this, apk);
+                                        } catch (Exception error) {
+                                            Toast.makeText(this,
+                                                    "Не удалось открыть установщик Android",
+                                                    Toast.LENGTH_LONG).show();
+                                        }
+                                    })
+                            .setNegativeButton("Позже", null)
+                            .show();
+                });
+            } catch (Exception error) {
+                mainHandler.post(() -> {
+                    progress.dismiss();
+                    if (isFinishing() || isDestroyed()) return;
+                    new AlertDialog.Builder(this)
+                            .setTitle("Обновление отклонено")
+                            .setMessage(error.getMessage() == null
+                                    ? "APK не прошёл проверку."
+                                    : error.getMessage())
+                            .setPositiveButton("Понятно", null)
+                            .setNeutralButton("Страница релиза",
+                                    (ignored, which) -> startActivity(
+                                            new Intent(Intent.ACTION_VIEW,
+                                                    Uri.parse(result.pageUrl))))
+                            .show();
+                });
+            }
+        });
     }
 
     private void confirmSpeedTest() {
@@ -3630,6 +3742,19 @@ public class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQUEST_INSTALL_UPDATES) {
+            UpdateChecker.Result update = pendingUpdate;
+            pendingUpdate = null;
+            if (update != null && (Build.VERSION.SDK_INT < 26
+                    || getPackageManager().canRequestPackageInstalls())) {
+                downloadVerifiedUpdate(update);
+            } else {
+                Toast.makeText(this,
+                        "Установка обновлений не разрешена",
+                        Toast.LENGTH_LONG).show();
+            }
+            return;
+        }
         IntentResult qrResult =
                 IntentIntegrator.parseActivityResult(requestCode, resultCode, data);
         if (qrResult != null) {

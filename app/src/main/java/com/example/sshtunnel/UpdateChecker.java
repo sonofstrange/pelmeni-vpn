@@ -21,17 +21,25 @@ final class UpdateChecker {
         final String notes;
         final String pageUrl;
         final String downloadUrl;
+        final String sha256;
         final long size;
         final boolean prerelease;
 
         Result(String version, String notes, String pageUrl,
-               String downloadUrl, long size, boolean prerelease) {
+               String downloadUrl, String sha256, long size,
+               boolean prerelease) {
             this.version = version;
             this.notes = notes;
             this.pageUrl = pageUrl;
             this.downloadUrl = downloadUrl;
+            this.sha256 = sha256;
             this.size = size;
             this.prerelease = prerelease;
+        }
+
+        boolean canInstallSecurely() {
+            return ApkUpdateInstaller.isTrustedDownloadUrl(downloadUrl)
+                    && sha256.matches("[0-9a-fA-F]{64}");
         }
     }
 
@@ -103,7 +111,7 @@ final class UpdateChecker {
         return newest;
     }
 
-    private static Result resultFrom(JSONObject release) {
+    static Result resultFrom(JSONObject release) {
         String version = release.optString("tag_name", "").trim();
         if (version.isEmpty() || !isNewer(version, BuildConfig.VERSION_NAME)) {
             return null;
@@ -111,6 +119,7 @@ final class UpdateChecker {
         String page = release.optString("html_url",
                 "https://github.com/sonofstrange/pelmeni-vpn/releases/latest");
         String download = page;
+        String sha256 = "";
         long size = 0;
         JSONArray assets = release.optJSONArray("assets");
         if (assets != null) {
@@ -120,13 +129,17 @@ final class UpdateChecker {
                 String name = asset.optString("name", "");
                 if (name.toLowerCase(java.util.Locale.ROOT).endsWith(".apk")) {
                     download = asset.optString("browser_download_url", page);
+                    String digest = asset.optString("digest", "").trim();
+                    if (digest.regionMatches(true, 0, "sha256:", 0, 7)) {
+                        sha256 = digest.substring(7).trim();
+                    }
                     size = asset.optLong("size", 0);
                     break;
                 }
             }
         }
         return new Result(version, release.optString("body", "").trim(),
-                page, download, size,
+                page, download, sha256, size,
                 release.optBoolean("prerelease", false));
     }
 

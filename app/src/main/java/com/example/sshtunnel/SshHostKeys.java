@@ -41,13 +41,22 @@ final class SshHostKeys {
 
     static ScannedKey scan(SecureStore store) throws Exception {
         ServerProfiles.Profile profile = requireActiveProfile(store);
+        return scan(store, profile);
+    }
+
+    static ScannedKey scan(
+            SecureStore store, ServerProfiles.Profile profile) throws Exception {
+        if (profile == null) throw new JSchException("No server profile");
         String host = profile.host.trim();
         int port = parsePort(profile.sshPort);
         JSch jsch = new JSch();
         Session session = jsch.getSession(profile.user.trim(), host, port);
         session.setConfig("StrictHostKeyChecking", "no");
         session.setConfig("PreferredAuthentications", "none");
-        session.setSocketFactory(TlsTransport.isEnabledFor(store, host)
+        ServerProfiles.Profile active = ServerProfiles.active(store);
+        boolean activeProfile = active != null && active.id.equals(profile.id);
+        session.setSocketFactory(activeProfile
+                && TlsTransport.isEnabledFor(store, host)
                 ? TlsTransport.socketFactory(store, null)
                 : new LowLatencySocketFactory(null));
         session.setTimeout(15_000);
@@ -69,7 +78,14 @@ final class SshHostKeys {
     }
 
     static boolean isTrusted(SecureStore store, ScannedKey scanned) {
-        StoredKey stored = read(store);
+        return isTrusted(store, ServerProfiles.active(store), scanned);
+    }
+
+    static boolean isTrusted(
+            SecureStore store, ServerProfiles.Profile profile,
+            ScannedKey scanned) {
+        if (profile == null) return false;
+        StoredKey stored = read(store, profile);
         return stored != null
                 && stored.host.equalsIgnoreCase(scanned.host)
                 && stored.port == scanned.port
@@ -77,7 +93,13 @@ final class SshHostKeys {
     }
 
     static String trustedFingerprint(SecureStore store) {
-        StoredKey stored = read(store);
+        return trustedFingerprint(store, ServerProfiles.active(store));
+    }
+
+    static String trustedFingerprint(
+            SecureStore store, ServerProfiles.Profile profile) {
+        if (profile == null) return "";
+        StoredKey stored = read(store, profile);
         if (stored == null) return "";
         try {
             return fingerprint(stored.key);
@@ -88,6 +110,13 @@ final class SshHostKeys {
 
     static void trust(SecureStore store, ScannedKey scanned) throws Exception {
         ServerProfiles.Profile profile = requireActiveProfile(store);
+        trust(store, profile, scanned);
+    }
+
+    static void trust(
+            SecureStore store, ServerProfiles.Profile profile,
+            ScannedKey scanned) throws Exception {
+        if (profile == null) throw new JSchException("No server profile");
         if (!profile.host.equalsIgnoreCase(scanned.host)
                 || parsePort(profile.sshPort) != scanned.port) {
             throw new JSchException("Server profile changed during host key verification");

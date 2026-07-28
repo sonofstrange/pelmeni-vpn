@@ -26,11 +26,13 @@ public final class SplitTunnel {
     public static final String MODE_ONLY = "only";
     private static final String KEY_PROFILES = "split_profiles";
     private static final String KEY_ACTIVE = "split_active";
+    private static final String KEY_SELECTED = "split_selected";
     private static final String KEY_ENABLED = "split_enabled";
     private static final String KEY_BUILTIN_VERSION = "split_builtin_version";
     private static final String BUILTIN_RUSSIAN_ID = "builtin_ru_bypass";
     private static final String BUILTIN_BRAWL_TEST_ID = "builtin_brawl_test";
-    private static final int BUILTIN_VERSION = 5;
+    private static final String BUILTIN_TELEGRAM_ID = "builtin_telegram_bypass";
+    private static final int BUILTIN_VERSION = 6;
     private static final int MAX_ENTRIES = 512;
     private static final int MAX_ROUTES = 8192;
 
@@ -153,6 +155,14 @@ public final class SplitTunnel {
             "44.224.0.0/11", "52.32.0.0/14"
     };
 
+    private static final String[] TELEGRAM_ENTRIES = {
+            "telegram.org", "telegram.me", "telegram.dog", "t.me",
+            "tdesktop.com", "telegra.ph",
+            "149.154.160.0/20", "91.108.4.0/22", "91.108.8.0/22",
+            "91.108.12.0/22", "91.108.16.0/22", "91.108.20.0/22",
+            "91.108.56.0/22"
+    };
+
     private SplitTunnel() {
     }
 
@@ -233,8 +243,12 @@ public final class SplitTunnel {
             Profile brawlTest = new Profile(
                     BUILTIN_BRAWL_TEST_ID, "ТЕСТ · Brawl Stars без VPN",
                     MODE_BYPASS, brawlTestEntries(), true);
+            Profile telegram = new Profile(
+                    BUILTIN_TELEGRAM_ID, "Telegram без VPN",
+                    MODE_BYPASS, telegramEntries(), true);
             ArrayList<Profile> defaults = new ArrayList<>();
             defaults.add(russian);
+            defaults.add(telegram);
             defaults.add(brawlTest);
             saveAll(store, defaults);
             store.putPlain(KEY_ACTIVE, russian.id);
@@ -257,6 +271,8 @@ public final class SplitTunnel {
                     "Искл. российские сервисы", builtinEntries());
             ensureBuiltinProfile(profiles, BUILTIN_BRAWL_TEST_ID,
                     "ТЕСТ · Brawl Stars без VPN", brawlTestEntries());
+            ensureBuiltinProfile(profiles, BUILTIN_TELEGRAM_ID,
+                    "Telegram без VPN", telegramEntries());
             store.putPlain(KEY_PROFILES, profiles.toString());
             store.putPlain(KEY_BUILTIN_VERSION, String.valueOf(BUILTIN_VERSION));
         } catch (Exception ignored) {
@@ -310,6 +326,77 @@ public final class SplitTunnel {
         return profiles.isEmpty() ? null : profiles.get(0);
     }
 
+    public static List<Profile> selected(SecureStore store) {
+        List<Profile> profiles = list(store);
+        ArrayList<String> ids = new ArrayList<>();
+        try {
+            JSONArray stored = new JSONArray(store.getPlain(KEY_SELECTED, "[]"));
+            for (int i = 0; i < stored.length(); i++) ids.add(stored.optString(i));
+        } catch (Exception ignored) {
+        }
+        if (ids.isEmpty()) ids.add(store.getPlain(KEY_ACTIVE, ""));
+
+        ArrayList<Profile> result = new ArrayList<>();
+        String mode = null;
+        for (String id : ids) {
+            for (Profile profile : profiles) {
+                if (!profile.id.equals(id)) continue;
+                if (mode == null) mode = profile.mode;
+                if (mode.equals(profile.mode) && !result.contains(profile)) {
+                    result.add(profile);
+                }
+                break;
+            }
+        }
+        if (result.isEmpty() && !profiles.isEmpty()) result.add(profiles.get(0));
+        return result;
+    }
+
+    public static Profile combined(SecureStore store) {
+        List<Profile> selected = selected(store);
+        if (selected.isEmpty()) return null;
+        ArrayList<String> entries = new ArrayList<>();
+        StringBuilder name = new StringBuilder();
+        for (Profile profile : selected) {
+            if (name.length() > 0) name.append(" + ");
+            name.append(profile.name);
+            for (String entry : profile.entries) {
+                if (!entries.contains(entry)) entries.add(entry);
+            }
+        }
+        return new Profile("combined", name.toString(), selected.get(0).mode,
+                entries, true);
+    }
+
+    public static boolean toggleSelected(SecureStore store, String id) {
+        List<Profile> profiles = list(store);
+        Profile target = null;
+        for (Profile profile : profiles) {
+            if (profile.id.equals(id)) target = profile;
+        }
+        if (target == null) return false;
+
+        List<Profile> selected = selected(store);
+        ArrayList<String> ids = new ArrayList<>();
+        boolean alreadySelected = false;
+        for (Profile profile : selected) {
+            if (profile.id.equals(id)) alreadySelected = true;
+            ids.add(profile.id);
+        }
+        if (alreadySelected) {
+            if (ids.size() == 1) return false;
+            ids.remove(id);
+        } else {
+            if (!selected.isEmpty() && !selected.get(0).mode.equals(target.mode)) {
+                ids.clear();
+            }
+            ids.add(id);
+        }
+        saveSelected(store, ids);
+        store.putPlain(KEY_ACTIVE, ids.get(0));
+        return true;
+    }
+
     public static boolean isBrawlTest(Profile profile) {
         return profile != null && BUILTIN_BRAWL_TEST_ID.equals(profile.id);
     }
@@ -321,6 +408,7 @@ public final class SplitTunnel {
 
     public static void saveAndActivate(SecureStore store, Profile profile) {
         List<Profile> profiles = list(store);
+        List<Profile> selectedBefore = selected(store);
         boolean replaced = false;
         for (int i = 0; i < profiles.size(); i++) {
             if (profiles.get(i).id.equals(profile.id)) {
@@ -331,13 +419,32 @@ public final class SplitTunnel {
         }
         if (!replaced) profiles.add(profile);
         saveAll(store, profiles);
-        store.putPlain(KEY_ACTIVE, profile.id);
+        ArrayList<String> selectedIds = new ArrayList<>();
+        boolean editedSelection = false;
+        boolean compatible = true;
+        for (Profile selected : selectedBefore) {
+            if (selected.id.equals(profile.id)) {
+                editedSelection = true;
+                selectedIds.add(profile.id);
+            } else {
+                compatible &= selected.mode.equals(profile.mode);
+                selectedIds.add(selected.id);
+            }
+        }
+        if (replaced && editedSelection && compatible) {
+            saveSelected(store, selectedIds);
+            store.putPlain(KEY_ACTIVE, selectedIds.get(0));
+        } else {
+            store.putPlain(KEY_ACTIVE, profile.id);
+            saveSelected(store, Collections.singletonList(profile.id));
+        }
     }
 
     public static void activate(SecureStore store, String id) {
         for (Profile profile : list(store)) {
             if (profile.id.equals(id)) {
                 store.putPlain(KEY_ACTIVE, id);
+                saveSelected(store, Collections.singletonList(id));
                 return;
             }
         }
@@ -355,8 +462,19 @@ public final class SplitTunnel {
         }
         if (!removed) return false;
         saveAll(store, profiles);
-        store.putPlain(KEY_ACTIVE, profiles.get(0).id);
+        List<Profile> selected = selected(store);
+        ArrayList<String> remaining = new ArrayList<>();
+        for (Profile profile : selected) {
+            if (!profile.id.equals(id)) remaining.add(profile.id);
+        }
+        if (remaining.isEmpty()) remaining.add(profiles.get(0).id);
+        saveSelected(store, remaining);
+        store.putPlain(KEY_ACTIVE, remaining.get(0));
         return true;
+    }
+
+    private static void saveSelected(SecureStore store, List<String> ids) {
+        store.putPlain(KEY_SELECTED, new JSONArray(ids).toString());
     }
 
     public static String exportJson(Profile profile) throws Exception {
@@ -386,7 +504,7 @@ public final class SplitTunnel {
 
     public static Routing resolve(SecureStore store) throws Exception {
         ensureDefaults(store);
-        return resolve(enabled(store), active(store));
+        return resolve(enabled(store), combined(store));
     }
 
     public static Routing resolve(boolean enabled, Profile profile) throws Exception {
@@ -525,6 +643,12 @@ public final class SplitTunnel {
     private static List<String> brawlTestEntries() {
         ArrayList<String> entries = new ArrayList<>();
         Collections.addAll(entries, BRAWL_TEST_ENTRIES);
+        return entries;
+    }
+
+    private static List<String> telegramEntries() {
+        ArrayList<String> entries = new ArrayList<>();
+        Collections.addAll(entries, TELEGRAM_ENTRIES);
         return entries;
     }
 

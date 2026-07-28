@@ -241,17 +241,26 @@ final class ServerAccessManager {
         return profileCredentials(store, ServerProfiles.active(store));
     }
 
-    private static Credentials profileCredentials(
-            SecureStore store, ServerProfiles.Profile profile) throws Exception {
+    static Credentials profileCredentials(
+            SecureStore store, ServerProfiles.Profile profile,
+            String password) throws Exception {
         if (profile == null) throw new Exception("Сервер не выбран.");
-        String password = ServerProfiles.password(store, profile.id);
-        if (password.isEmpty()) throw new Exception("Нет пароля администратора сервера.");
+        if (password == null || password.isEmpty()) {
+            throw new Exception("Нет пароля администратора сервера.");
+        }
         try {
             return new Credentials(store, profile, profile.host,
                     Integer.parseInt(profile.sshPort), profile.user, password);
         } catch (NumberFormatException error) {
             throw new Exception("Неверный SSH-порт.");
         }
+    }
+
+    private static Credentials profileCredentials(
+            SecureStore store, ServerProfiles.Profile profile) throws Exception {
+        if (profile == null) throw new Exception("Сервер не выбран.");
+        String password = ServerProfiles.password(store, profile.id);
+        return profileCredentials(store, profile, password);
     }
 
     private static String run(Credentials credentials, String action, JSONObject request)

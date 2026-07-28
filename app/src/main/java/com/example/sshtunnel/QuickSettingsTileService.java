@@ -31,8 +31,17 @@ public class QuickSettingsTileService extends TileService {
             return;
         }
         if (store.getBoolean("enabled", false)) store.putBoolean("enabled", false);
+        boolean vpnMode = store.getBoolean("vpn_mode", false);
+        boolean proxyMode = store.getBoolean("telegram_proxy", false);
+        boolean setupRequired = ServerProfiles.active(store) == null
+                || (!vpnMode && !proxyMode)
+                || SshHostKeys.trustedFingerprint(store).isEmpty();
+        if (setupRequired) {
+            openAppForVpnPermission();
+            return;
+        }
 
-        if (store.getBoolean("vpn_mode", false) && VpnService.prepare(this) != null) {
+        if (vpnMode && VpnService.prepare(this) != null) {
             openAppForVpnPermission();
             return;
         }
@@ -40,7 +49,7 @@ public class QuickSettingsTileService extends TileService {
         Intent ssh = new Intent(this, TunnelService.class).setAction(TunnelService.START);
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(ssh);
         else startService(ssh);
-        if (store.getBoolean("vpn_mode", false)) {
+        if (vpnMode) {
             Intent vpn = VpnTunnelService.includeRoutingSnapshot(
                     new Intent(this, VpnTunnelService.class)
                             .setAction(VpnTunnelService.START), store);

@@ -13,8 +13,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class TunnelService extends Service {
     public static final String START = "start";
     public static final String STOP = "stop";
+    public static final String RECONFIGURE = "reconfigure";
     public static final String ACTION_STATUS = "com.example.sshtunnel.STATUS";
 
+    public static final String EXTRA_RUNNING = "tunnel_running";
     private static final String CHANNEL = "tunnel";
     private static final String LIMIT_CHANNEL = "user_limits_v2";
     private static final int ID = 42;
@@ -73,19 +75,15 @@ public class TunnelService extends Service {
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && STOP.equals(intent.getAction())) {
-            wanted = false;
-            connected = false;
-            new SecureStore(this).putBoolean("enabled", false);
-            startService(new Intent(this, VpnTunnelService.class)
-                    .setAction(VpnTunnelService.STOP)
-                    .putExtra(VpnTunnelService.EXTRA_STOP_SSH, false));
-            disconnect();
-            persistTotals();
-            send("Отключено");
-            stopForeground(STOP_FOREGROUND_REMOVE);
-            getSystemService(NotificationManager.class).cancel(ID);
-            stopSelf();
+            stopAfterFailure("Отключено");
             return START_NOT_STICKY;
+        }
+        if (intent != null && RECONFIGURE.equals(intent.getAction()) && wanted) {
+            forceReconnect = true;
+            send("Переключаемся на "
+                    + TunnelMode.label(new SecureStore(this)) + "…");
+            disconnect();
+            return START_STICKY;
         }
 
         SecureStore store = new SecureStore(this);
@@ -279,11 +277,20 @@ public class TunnelService extends Service {
                         if (!wanted) break;
                         connected = false;
                         String message = classifyError(e);
+                        if (!shouldRetryAfterFailure()) {
+                            stopAfterFailure(message);
+                            break;
+                        }
                         send(message + " Повтор через " + delaySeconds + " сек…");
                     } catch (Exception e) {
                         if (!wanted) break;
                         connected = false;
-                        send("SSH-соединение потеряно. Повтор через " + delaySeconds + " сек…");
+                        String message = "SSH-соединение потеряно.";
+                        if (!shouldRetryAfterFailure()) {
+                            stopAfterFailure(message);
+                            break;
+                        }
+                        send(message + " Повтор через " + delaySeconds + " сек…");
                     } finally {
                         disconnect();
                     }
@@ -505,7 +512,7 @@ public class TunnelService extends Service {
     }
 
     private String classifyError(JSchException e) {
-        String m = e.getMessage() == null ? "" : e.getMessage().toLowerCase();
+        String m = e.getMessage() == null ? "" : e.getMessage().toLowerCase(java.util.Locale.ROOT);
         if (m.contains("auth fail")) return "Неверный логин или пароль.";
         if (m.contains("timeout")) return "Сервер не отвечает.";
         if (m.contains("connection refused")) return "SSH-порт недоступен.";
@@ -619,9 +626,31 @@ public class TunnelService extends Service {
                 .putExtra("limit_warning", alert.title + "\n" + alert.text));
     }
 
+    private boolean shouldRetryAfterFailure() {
+        return forceReconnect
+                || new SecureStore(this).getBoolean("auto_reconnect", true);
+    }
+
+    private void stopAfterFailure(String message) {
+        wanted = false;
+        connected = false;
+        new SecureStore(this).putBoolean("enabled", false);
+        startService(new Intent(this, VpnTunnelService.class)
+                .setAction(VpnTunnelService.STOP)
+                .putExtra(VpnTunnelService.EXTRA_STOP_SSH, false));
+        disconnect();
+        persistTotals();
+        send(message);
+        stopForeground(STOP_FOREGROUND_REMOVE);
+        getSystemService(NotificationManager.class).cancel(ID);
+        stopSelf();
+    }
+
     private void send(String text) {
         currentStatus = text;
-        sendBroadcast(new Intent(ACTION_STATUS).setPackage(getPackageName()).putExtra("status", text));
+        sendBroadcast(new Intent(ACTION_STATUS).setPackage(getPackageName())
+                .putExtra("status", text)
+                .putExtra(EXTRA_RUNNING, wanted));
         android.service.quicksettings.TileService.requestListeningState(
                 this, new ComponentName(this, QuickSettingsTileService.class));
         NotificationManager nm = getSystemService(NotificationManager.class);

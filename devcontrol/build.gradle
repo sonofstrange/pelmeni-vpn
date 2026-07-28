@@ -1,5 +1,16 @@
 plugins { id 'com.android.application' }
 
+def releaseKeystorePath = System.getenv('PELMENI_RELEASE_KEYSTORE')
+def releaseStorePassword = System.getenv('PELMENI_RELEASE_STORE_PASSWORD')
+def releaseKeyAlias = System.getenv('PELMENI_RELEASE_KEY_ALIAS')
+def releaseKeyPassword = System.getenv('PELMENI_RELEASE_KEY_PASSWORD')
+def releaseSigningReady = [
+        releaseKeystorePath,
+        releaseStorePassword,
+        releaseKeyAlias,
+        releaseKeyPassword
+].every { it != null && !it.isBlank() }
+
 android {
     namespace 'com.example.sshtunnel.devcontrol'
     compileSdk 35
@@ -12,9 +23,22 @@ android {
         versionName '1.0'
     }
 
+    signingConfigs {
+        release {
+            if (releaseSigningReady) {
+                storeFile file(releaseKeystorePath)
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
-            signingConfig signingConfigs.debug
+            if (releaseSigningReady) {
+                signingConfig signingConfigs.release
+            }
             minifyEnabled false
         }
     }
@@ -22,5 +46,18 @@ android {
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+tasks.configureEach { task ->
+    if (task.name ==~ /(?i).*(assemble|bundle|package|sign).*Release.*/) {
+        task.doFirst {
+            if (!releaseSigningReady) {
+                throw new GradleException(
+                        'Release signing is not configured. Set PELMENI_RELEASE_KEYSTORE, '
+                                + 'PELMENI_RELEASE_STORE_PASSWORD, PELMENI_RELEASE_KEY_ALIAS '
+                                + 'and PELMENI_RELEASE_KEY_PASSWORD.')
+            }
+        }
     }
 }

@@ -2308,7 +2308,6 @@ public class MainActivity extends Activity {
             edit.setGravity(android.view.Gravity.CENTER);
             edit.setClickable(true);
             edit.setFocusable(true);
-            edit.setEnabled(!running);
             edit.setContentDescription("Параметры сервера " + profile.name);
             edit.setLayoutParams(new LinearLayout.LayoutParams(
                     dp(62), dp(56)));
@@ -2392,8 +2391,7 @@ public class MainActivity extends Activity {
             LinearLayout empty = createCard();
             addCardTitle(empty, "Пока нет свободных серверов");
             addCardSubtitle(empty,
-                    "Debug-пользователи могут опубликовать свой сервер "
-                            + "из его настроек.");
+                    "Опубликовать свой сервер можно из его настроек.");
             page.addView(empty, pageCardParams());
         }
         for (PublicServerRegistry.Entry entry : entries) {
@@ -2486,10 +2484,6 @@ public class MainActivity extends Activity {
     }
 
     private void showServerEditor(ServerProfiles.Profile profile) {
-        if (running && profile != null) {
-            Toast.makeText(this, "Сначала отключи туннель", Toast.LENGTH_SHORT).show();
-            return;
-        }
         SecureStore store = new SecureStore(this);
         boolean sharedAccess = profile != null && profile.user.startsWith("pel_");
         LinearLayout page = createPageContent(

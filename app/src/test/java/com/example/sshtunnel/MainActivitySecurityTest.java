@@ -47,6 +47,39 @@ public class MainActivitySecurityTest {
         assertTrue(activity.contains("intent.hasExtra(TunnelService.EXTRA_RUNNING)"));
     }
 
+    @Test public void releaseSigningRequiresExternalCredentials()
+            throws IOException {
+        String build = readProjectFile("app/build.gradle");
+
+        assertFalse(build.contains("signingConfig signingConfigs.debug"));
+        assertTrue(build.contains("PELMENI_RELEASE_KEYSTORE"));
+        assertTrue(build.contains("Release signing is not configured"));
+    }
+
+    @Test public void serverEditorCanReconfigureAnActiveConnection()
+            throws IOException {
+        String activity = readProjectFile(
+                "app/src/main/java/com/example/sshtunnel/MainActivity.java");
+
+        assertFalse(activity.contains("edit.setEnabled(!running)"));
+        assertTrue(activity.contains("boolean reconnect = running;"));
+        assertTrue(activity.contains(
+                "toggle.postDelayed(this::startTunnel, 900)"));
+    }
+
+    @Test public void tunnelResourcesAndFinalTotalsAreBounded()
+            throws IOException {
+        String proxy = readProjectFile(
+                "app/src/main/java/com/example/sshtunnel/SocksProxy.java");
+        String service = readProjectFile(
+                "app/src/main/java/com/example/sshtunnel/TunnelService.java");
+
+        assertTrue(proxy.contains("MAX_CLIENTS = 24"));
+        assertFalse(proxy.contains("Executors.newCachedThreadPool()"));
+        assertTrue(service.contains("persistFinalTotals()"));
+        assertTrue(service.contains("if (finalTotalsPersisted) return;"));
+    }
+
     private static String readProjectFile(String relative) throws IOException {
         Path directory = Path.of(System.getProperty("user.dir")).toAbsolutePath();
         Path fromRoot = directory.resolve(relative);

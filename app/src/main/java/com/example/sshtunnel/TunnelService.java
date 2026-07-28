@@ -49,6 +49,7 @@ public class TunnelService extends Service {
     private int statsTicks;
     private int policySyncTicks;
     private long lastUsageResetAt;
+    private boolean finalTotalsPersisted;
     private volatile String currentStatus = "Подключение…";
     private volatile long currentSpeed;
     private volatile int currentLatency = -1;
@@ -100,6 +101,7 @@ public class TunnelService extends Service {
         if (!wanted) {
             sessionUploaded = 0;
             sessionDownloaded = 0;
+            finalTotalsPersisted = false;
             lastSampleBytes = 0;
             lastPolicyBytes = 0;
             lastSampleTime = SystemClock.elapsedRealtime();
@@ -711,6 +713,12 @@ public class TunnelService extends Service {
         store.putLong("total_downloaded", totalDownloaded + traffic[1]);
     }
 
+    private synchronized void persistFinalTotals() {
+        if (finalTotalsPersisted) return;
+        persistTotals();
+        finalTotalsPersisted = true;
+    }
+
     private void recordPolicyUsage(long currentBytes) {
         long added = Math.max(0, currentBytes - lastPolicyBytes);
         lastPolicyBytes = currentBytes;
@@ -755,7 +763,7 @@ public class TunnelService extends Service {
                 .setAction(VpnTunnelService.STOP)
                 .putExtra(VpnTunnelService.EXTRA_STOP_SSH, false));
         disconnect();
-        persistTotals();
+        persistFinalTotals();
         send(message);
         stopForeground(STOP_FOREGROUND_REMOVE);
         getSystemService(NotificationManager.class).cancel(ID);
@@ -839,7 +847,7 @@ public class TunnelService extends Service {
         connected = false;
         wanted = false;
         disconnect();
-        persistTotals();
+        persistFinalTotals();
         if (networkCallback != null) {
             try { connectivityManager.unregisterNetworkCallback(networkCallback); } catch (Exception ignored) {}
         }

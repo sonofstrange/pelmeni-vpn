@@ -14,22 +14,31 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import android.os.SystemClock;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 /** A local SOCKS5 CONNECT proxy backed by SSH direct-tcpip channels. */
 final class SocksProxy implements AutoCloseable {
+    private static final int MAX_CLIENTS = 24;
     private final Session session;
     private final int port;
     private final int windowSize;
     private final int packetSize;
     private final UserTrafficLimiter trafficLimiter;
-    private final ExecutorService clients = Executors.newCachedThreadPool();
+    private final ExecutorService clients = new ThreadPoolExecutor(
+            0, MAX_CLIENTS * 2, 30, TimeUnit.SECONDS,
+            new SynchronousQueue<>());
+    private final Semaphore clientSlots = new Semaphore(MAX_CLIENTS);
     private final AtomicLong uploadedBytes = new AtomicLong();
     private final AtomicLong downloadedBytes = new AtomicLong();
     private volatile int lastLatencyMs = -1;
     private volatile boolean running;
     private ServerSocket server;
+    private Thread acceptThread;
 
     SocksProxy(Session session, int port, int windowSize, int packetSize) {
         this(session, port, windowSize, packetSize, null);
@@ -49,18 +58,34 @@ final class SocksProxy implements AutoCloseable {
         server.setReuseAddress(true);
         server.bind(new InetSocketAddress("127.0.0.1", port));
         running = true;
-        clients.execute(() -> {
+        acceptThread = new Thread(() -> {
             while (running) {
                 try {
                     Socket client = server.accept();
-                    clients.execute(() -> handle(client));
+                    if (!clientSlots.tryAcquire()) {
+                        client.close();
+                        continue;
+                    }
+                    try {
+                        clients.execute(() -> {
+                            try {
+                                handle(client);
+                            } finally {
+                                clientSlots.release();
+                            }
+                        });
+                    } catch (RejectedExecutionException rejected) {
+                        clientSlots.release();
+                        client.close();
+                    }
                 } catch (IOException ignored) {
                     if (!running) return;
                     running = false;
                     return;
                 }
             }
-        });
+        }, "pelmeni-socks-accept-" + port);
+        acceptThread.start();
     }
 
     private void handle(Socket client) {
@@ -204,5 +229,8 @@ final class SocksProxy implements AutoCloseable {
             server = null;
         }
         clients.shutdownNow();
+        Thread currentAcceptThread = acceptThread;
+        acceptThread = null;
+        if (currentAcceptThread != null) currentAcceptThread.interrupt();
     }
 }

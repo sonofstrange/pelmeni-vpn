@@ -1,5 +1,16 @@
 plugins { id 'com.android.application' }
 
+def releaseKeystorePath = System.getenv('PELMENI_RELEASE_KEYSTORE')
+def releaseStorePassword = System.getenv('PELMENI_RELEASE_STORE_PASSWORD')
+def releaseKeyAlias = System.getenv('PELMENI_RELEASE_KEY_ALIAS')
+def releaseKeyPassword = System.getenv('PELMENI_RELEASE_KEY_PASSWORD')
+def releaseSigningReady = [
+        releaseKeystorePath,
+        releaseStorePassword,
+        releaseKeyAlias,
+        releaseKeyPassword
+].every { it != null && !it.isBlank() }
+
 android {
     namespace 'com.example.sshtunnel'
     compileSdk 35
@@ -9,15 +20,26 @@ android {
         applicationId 'com.example.sshtunnel'
         minSdk 26
         targetSdk 35
-        versionCode 57
-        versionName '1.30-beta.1'
+        versionCode 58
+        versionName '1.30-beta.2'
+    }
+
+    signingConfigs {
+        release {
+            if (releaseSigningReady) {
+                storeFile file(releaseKeystorePath)
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
+        }
     }
 
     buildTypes {
         release {
-            // Keep update compatibility with the current local beta key while
-            // ensuring the distributable app is not ADB-debuggable.
-            signingConfig signingConfigs.debug
+            if (releaseSigningReady) {
+                signingConfig signingConfigs.release
+            }
             minifyEnabled false
         }
     }
@@ -25,6 +47,19 @@ android {
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+tasks.configureEach { task ->
+    if (task.name ==~ /(?i).*(assemble|bundle|package|sign).*Release.*/) {
+        task.doFirst {
+            if (!releaseSigningReady) {
+                throw new GradleException(
+                        'Release signing is not configured. Set PELMENI_RELEASE_KEYSTORE, '
+                                + 'PELMENI_RELEASE_STORE_PASSWORD, PELMENI_RELEASE_KEY_ALIAS '
+                                + 'and PELMENI_RELEASE_KEY_PASSWORD.')
+            }
+        }
     }
 }
 

@@ -81,6 +81,17 @@ public class MainActivitySecurityTest {
         assertTrue(service.contains("if (finalTotalsPersisted) return;"));
     }
 
+    @Test public void automaticFailoverOnlyUsesPreparedProfiles()
+            throws IOException {
+        String service = readProjectFile(
+                "app/src/main/java/com/example/sshtunnel/TunnelService.java");
+
+        assertTrue(service.contains("ServerFailover.FAILURE_THRESHOLD"));
+        assertTrue(service.contains("ServerProfiles.password(store, profile.id)"));
+        assertTrue(service.contains("SshHostKeys.trustedKey(store, profile)"));
+        assertTrue(service.contains("ServerProfiles.activate(store, next.id)"));
+    }
+
     private static String readProjectFile(String relative) throws IOException {
         Path directory = Path.of(System.getProperty("user.dir")).toAbsolutePath();
         Path fromRoot = directory.resolve(relative);

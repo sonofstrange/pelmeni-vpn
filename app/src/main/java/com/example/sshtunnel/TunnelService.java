@@ -7,6 +7,9 @@ import android.os.*;
 
 import com.jcraft.jsch.*;
 
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -17,6 +20,7 @@ public class TunnelService extends Service {
     public static final String ACTION_STATUS = "com.example.sshtunnel.STATUS";
 
     public static final String EXTRA_RUNNING = "tunnel_running";
+    public static final String EXTRA_SERVER_CHANGED = "server_changed";
     private static final String CHANNEL = "tunnel";
     private static final String LIMIT_CHANNEL = "user_limits_v2";
     private static final int ID = 42;
@@ -54,6 +58,9 @@ public class TunnelService extends Service {
     private volatile long currentSpeed;
     private volatile int currentLatency = -1;
     private volatile int connectAttempts;
+    private String failingProfileId = "";
+    private int consecutiveProfileFailures;
+    private final Set<String> failoverVisited = new HashSet<>();
     private volatile long serviceStartedAt;
     private volatile long connectedAt;
     private volatile String lastError = "нет";
@@ -102,6 +109,7 @@ public class TunnelService extends Service {
             sessionUploaded = 0;
             sessionDownloaded = 0;
             finalTotalsPersisted = false;
+            resetFailoverState();
             lastSampleBytes = 0;
             lastPolicyBytes = 0;
             lastSampleTime = SystemClock.elapsedRealtime();
@@ -293,7 +301,9 @@ public class TunnelService extends Service {
                             stopAfterFailure(message);
                             break;
                         }
-                        send(message + " Повтор через " + delaySeconds + " сек…");
+                        if (!maybeSwitchServer(message)) {
+                            send(message + " Повтор через " + delaySeconds + " сек…");
+                        }
                     } catch (Exception e) {
                         if (!wanted) break;
                         connected = false;
@@ -305,7 +315,9 @@ public class TunnelService extends Service {
                             stopAfterFailure(message);
                             break;
                         }
-                        send(message + " Повтор через " + delaySeconds + " сек…");
+                        if (!maybeSwitchServer(message)) {
+                            send(message + " Повтор через " + delaySeconds + " сек…");
+                        }
                     } finally {
                         disconnect();
                     }
@@ -384,6 +396,7 @@ public class TunnelService extends Service {
             connected = true;
             connectedAt = SystemClock.elapsedRealtime();
             lastError = "нет";
+            resetFailoverState();
         } catch (Exception error) {
             if (newTelegramProxy != null) newTelegramProxy.close();
             if (newVpnProxy != null) newVpnProxy.close();
@@ -393,6 +406,63 @@ public class TunnelService extends Service {
         }
 
         send("Подключено · " + TunnelMode.portsLabel(store));
+    }
+
+    private boolean maybeSwitchServer(String failureMessage) {
+        SecureStore store = new SecureStore(this);
+        if (!store.getBoolean("auto_server_failover", false)) {
+            resetFailoverState();
+            return false;
+        }
+        ServerProfiles.Profile current = ServerProfiles.active(store);
+        if (current == null) return false;
+        if (!current.id.equals(failingProfileId)) {
+            failingProfileId = current.id;
+            consecutiveProfileFailures = 0;
+        }
+        consecutiveProfileFailures++;
+        if (consecutiveProfileFailures < ServerFailover.FAILURE_THRESHOLD) {
+            return false;
+        }
+
+        List<ServerProfiles.Profile> profiles = ServerProfiles.list(store);
+        failoverVisited.add(current.id);
+        ServerProfiles.Profile next = nextFailoverProfile(
+                store, profiles, current.id);
+        if (next == null) {
+            failoverVisited.clear();
+            failoverVisited.add(current.id);
+            next = nextFailoverProfile(store, profiles, current.id);
+        }
+        if (next == null) return false;
+        try {
+            ServerProfiles.activate(store, next.id);
+            failingProfileId = next.id;
+            consecutiveProfileFailures = 0;
+            lastError = failureMessage;
+            sendBroadcast(new Intent(ACTION_STATUS).setPackage(getPackageName())
+                    .putExtra(EXTRA_SERVER_CHANGED, true));
+            send("«" + current.name + "» недоступен. Переключаемся на «"
+                    + next.name + "»…");
+            return true;
+        } catch (Exception error) {
+            return false;
+        }
+    }
+
+    private ServerProfiles.Profile nextFailoverProfile(
+            SecureStore store, List<ServerProfiles.Profile> profiles,
+            String currentId) {
+        return ServerFailover.next(
+                profiles, currentId, failoverVisited,
+                profile -> !ServerProfiles.password(store, profile.id).isEmpty()
+                        && SshHostKeys.trustedKey(store, profile) != null);
+    }
+
+    private void resetFailoverState() {
+        failingProfileId = "";
+        consecutiveProfileFailures = 0;
+        failoverVisited.clear();
     }
 
     private Session connectSession(

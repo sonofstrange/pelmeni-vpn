@@ -111,6 +111,10 @@ public class MainActivity extends Activity {
                 updateDebugPanel();
                 return;
             }
+            if (intent.getBooleanExtra(
+                    TunnelService.EXTRA_SERVER_CHANGED, false)) {
+                loadSettings();
+            }
             if (intent.hasExtra("speed_bps")) updateStats(intent);
             String limitWarning = intent.getStringExtra("limit_warning");
             if (limitWarning != null) {
@@ -211,8 +215,11 @@ public class MainActivity extends Activity {
                     : InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
             password.setSelection(Math.max(0, Math.min(position, password.length())));
         });
-        autoReconnect.setOnCheckedChangeListener((button, checked) ->
-                new SecureStore(this).putBoolean("auto_reconnect", checked));
+        autoReconnect.setOnCheckedChangeListener((button, checked) -> {
+            SecureStore store = new SecureStore(this);
+            store.putBoolean("auto_reconnect", checked);
+            if (!checked) store.putBoolean("auto_server_failover", false);
+        });
         startOnBoot.setOnCheckedChangeListener((button, checked) ->
                 new SecureStore(this).putBoolean("start_on_boot", checked));
         enableVpn.setOnCheckedChangeListener((button, checked) -> {
@@ -969,6 +976,15 @@ public class MainActivity extends Activity {
         addToggleCard(page, "Автопереподключение",
                 "Восстанавливать туннель после смены Wi‑Fi или мобильной сети.",
                 autoReconnect.isChecked(), checked -> autoReconnect.setChecked(checked));
+        SecureStore settingsStore = new SecureStore(this);
+        addToggleCard(page, "Резервный сервер",
+                "После трёх неудачных подключений перейти к следующему "
+                        + "сохранённому серверу с подтверждённым SSH-ключом.",
+                settingsStore.getBoolean("auto_server_failover", false),
+                checked -> {
+                    if (checked) autoReconnect.setChecked(true);
+                    settingsStore.putBoolean("auto_server_failover", checked);
+                });
         addToggleCard(page, "Запуск после перезагрузки",
                 "Попытаться вернуть последнее активное подключение после запуска телефона.",
                 startOnBoot.isChecked(), checked -> startOnBoot.setChecked(checked));
@@ -3301,6 +3317,8 @@ public class MainActivity extends Activity {
                     .put("vpn_mode", enableVpn.isChecked())
                     .put("telegram_proxy", enableTelegram.isChecked())
                     .put("auto_reconnect", autoReconnect.isChecked())
+                    .put("auto_server_failover",
+                            store.getBoolean("auto_server_failover", false))
                     .put("start_on_boot", startOnBoot.isChecked())
                     .put("ssh_window_kib", NetworkTuning.windowKiB(store))
                     .put("ssh_packet_kib", NetworkTuning.packetKiB(store))
@@ -3373,6 +3391,8 @@ public class MainActivity extends Activity {
             ServerProfiles.saveAndActivate(store, importedProfile, importedPassword);
             store.putBoolean("auto_reconnect",
                     config.optBoolean("auto_reconnect", true));
+            store.putBoolean("auto_server_failover",
+                    config.optBoolean("auto_server_failover", false));
             store.putBoolean("start_on_boot",
                     config.optBoolean("start_on_boot", false));
             boolean importedVpn = config.optBoolean("vpn_mode", false);

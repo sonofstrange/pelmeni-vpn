@@ -108,6 +108,19 @@ final class SshHostKeys {
         }
     }
 
+    static ScannedKey trustedKey(
+            SecureStore store, ServerProfiles.Profile profile) {
+        if (profile == null) return null;
+        StoredKey stored = read(store, profile);
+        if (stored == null) return null;
+        try {
+            return new ScannedKey(stored.host, stored.port, stored.type,
+                    Base64.getEncoder().encodeToString(stored.key));
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
     static void trust(SecureStore store, ScannedKey scanned) throws Exception {
         ServerProfiles.Profile profile = requireActiveProfile(store);
         trust(store, profile, scanned);

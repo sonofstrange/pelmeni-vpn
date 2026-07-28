@@ -560,6 +560,9 @@ public class MainActivity extends Activity {
     private void showAddServerChoice() {
         LinearLayout page = createPageContent("Добавить сервер",
                 "Выбери, как ты хочешь подключиться.");
+        addPageAction(page, "Бесплатные серверы",
+                "Получить отдельный доступ с личными лимитами из публичного каталога",
+                () -> showFreeServersPage(null, null));
         addPageAction(page, "Настроить свой сервер",
                 "Ввести IP, SSH-пользователя, пароль и параметры сервера",
                 () -> showServerEditor(null));
@@ -2331,7 +2334,136 @@ public class MainActivity extends Activity {
         addParams.topMargin = dp(22);
         add.setOnClickListener(v -> showAddServerChoice());
         page.addView(add, addParams);
+        Button free = new Button(this);
+        free.setText("БЕСПЛАТНЫЕ СЕРВЕРЫ");
+        free.setTextSize(15);
+        LinearLayout.LayoutParams freeParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        freeParams.topMargin = dp(8);
+        free.setOnClickListener(v -> showFreeServersPage(null, null));
+        page.addView(free, freeParams);
         showScrollablePage(page, navHome);
+    }
+
+    private void showFreeServersPage(
+            List<PublicServerRegistry.Entry> entries, String error) {
+        LinearLayout page = createPageContent("Бесплатные серверы",
+                "Каждое подключение получает отдельный SSH-аккаунт, "
+                        + "свои счётчики трафика и лимиты владельца.");
+        LinearLayout community = createCard();
+        addCardTitle(community, "Общественный каталог");
+        addCardSubtitle(community,
+                "Серверы добавляют участники сообщества и проект их не "
+                        + "администрирует. Владелец VPN технически может видеть "
+                        + "IP-адреса назначений и незашифрованный HTTP-трафик.");
+        page.addView(community, pageCardParams());
+        if (entries == null && error == null) {
+            LinearLayout loading = createCard();
+            addCardTitle(loading, "Обновляю каталог…");
+            addCardSubtitle(loading,
+                    "Список загружается из открытого реестра проекта.");
+            page.addView(loading, pageCardParams());
+            showScrollablePage(page, navAdd);
+            speedWorker.execute(() -> {
+                try {
+                    List<PublicServerRegistry.Entry> loaded =
+                            PublicServerRegistry.load();
+                    mainHandler.post(() ->
+                            showFreeServersPage(loaded, null));
+                } catch (Exception loadError) {
+                    mainHandler.post(() -> showFreeServersPage(
+                            null, loadError.getMessage()));
+                }
+            });
+            return;
+        }
+        if (error != null) {
+            LinearLayout failed = createCard();
+            addCardTitle(failed, "Каталог недоступен");
+            addCardSubtitle(failed, error);
+            page.addView(failed, pageCardParams());
+            addPageAction(page, "Повторить", "Загрузить список ещё раз",
+                    () -> showFreeServersPage(null, null));
+            showScrollablePage(page, navAdd);
+            return;
+        }
+        if (entries.isEmpty()) {
+            LinearLayout empty = createCard();
+            addCardTitle(empty, "Пока нет свободных серверов");
+            addCardSubtitle(empty,
+                    "Debug-пользователи могут опубликовать свой сервер "
+                            + "из его настроек.");
+            page.addView(empty, pageCardParams());
+        }
+        for (PublicServerRegistry.Entry entry : entries) {
+            LinearLayout card = createCard();
+            addCardTitle(card, entry.name);
+            addCardSubtitle(card,
+                    (entry.location.isEmpty()
+                            ? "Регион не указан" : entry.location)
+                            + "\n" + entry.limitsLabel()
+                            + "\nTLS: " + (entry.tls ? "включён" : "нет")
+                            + "\nSSH fingerprint: " + entry.fingerprint);
+            Button connect = new Button(this);
+            connect.setText("ПОЛУЧИТЬ ЛИЧНЫЙ ДОСТУП");
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, dp(52));
+            params.topMargin = dp(10);
+            card.addView(connect, params);
+            connect.setOnClickListener(v ->
+                    claimPublicServer(entry, connect));
+            page.addView(card, pageCardParams());
+        }
+        addPageAction(page, "Обновить каталог",
+                "Проверить новые серверы и свободные места",
+                () -> showFreeServersPage(null, null));
+        showScrollablePage(page, navAdd);
+    }
+
+    private void claimPublicServer(
+            PublicServerRegistry.Entry entry, Button button) {
+        button.setEnabled(false);
+        button.setText("ПРОВЕРЯЮ И ВЫДАЮ ДОСТУП…");
+        boolean reconnect = running;
+        if (reconnect) stopTunnel();
+        speedWorker.execute(() -> {
+            try {
+                SecureStore store = new SecureStore(this);
+                String code = PublicServerManager.claim(store, entry);
+                ServerProfiles.Profile profile =
+                        ServerAccessCode.importCode(store, code);
+                SshHostKeys.ScannedKey key = new SshHostKeys.ScannedKey(
+                        entry.host, entry.sshPort,
+                        entry.hostKeyType, entry.hostKey);
+                SshHostKeys.trust(store, profile, key);
+                if (ServerAccessCode.requestsTls(code)) {
+                    ServerAccessCode.importTls(store, profile, code);
+                }
+                mainHandler.post(() -> {
+                    loadSettings();
+                    Toast.makeText(this,
+                            "Добавлен бесплатный сервер «"
+                                    + profile.name + "»",
+                            Toast.LENGTH_LONG).show();
+                    showHomePage();
+                    if (reconnect) {
+                        toggle.postDelayed(this::startTunnel, 900);
+                    }
+                });
+            } catch (Exception claimError) {
+                mainHandler.post(() -> {
+                    button.setEnabled(true);
+                    button.setText("ПОЛУЧИТЬ ЛИЧНЫЙ ДОСТУП");
+                    Toast.makeText(this,
+                            "Доступ не выдан: " + claimError.getMessage(),
+                            Toast.LENGTH_LONG).show();
+                    if (reconnect) {
+                        toggle.postDelayed(this::startTunnel, 900);
+                    }
+                });
+            }
+        });
     }
 
     private void switchToServer(ServerProfiles.Profile profile) {
@@ -2491,6 +2623,13 @@ public class MainActivity extends Activity {
                         else Toast.makeText(this, "Сначала выбери этот сервер",
                                 Toast.LENGTH_SHORT).show();
                     });
+            addPageAction(page, "Проверить SSH-ключ",
+                    "Показать текущий fingerprint и безопасно заменить "
+                            + "закреплённый ключ после переустановки VPS",
+                    () -> ensureSshHostKeyForced(profile, () ->
+                            Toast.makeText(this,
+                                    "SSH-ключ подтверждён",
+                                    Toast.LENGTH_SHORT).show()));
             addPageAction(page, "Перенести на новый сервер",
                     isActive
                             ? "Скопировать пользователей и настройки, затем заменить адрес этого профиля"
@@ -2500,6 +2639,27 @@ public class MainActivity extends Activity {
                         else Toast.makeText(this, "Сначала выбери этот сервер",
                                 Toast.LENGTH_SHORT).show();
                     });
+            if (Branding.isDeveloperMode(this)) {
+                PublicServerRegistry.Entry published =
+                        PublicServerManager.saved(store, profile.id);
+                addPageAction(page,
+                        published == null
+                                ? "Сделать сервер публичным"
+                                : "Публичный режим настроен",
+                        published == null
+                                ? "Создать безопасную выдачу отдельных "
+                                + "аккаунтов и лимитов для бесплатного каталога"
+                                : "Снова открыть страницу публикации «"
+                                + published.name + "»",
+                        () -> {
+                            if (published == null) {
+                                showPublishServerPage(profile);
+                            } else {
+                                showPublishedServerPage(
+                                        profile, published);
+                            }
+                        });
+            }
         }
 
         Button saveProfile = new Button(this);
@@ -2569,6 +2729,196 @@ public class MainActivity extends Activity {
             page.addView(delete, deleteParams);
             delete.setOnClickListener(v -> confirmDeleteServerPage(profile));
         }
+        showScrollablePage(page, navAdd);
+    }
+
+    private void showPublishServerPage(ServerProfiles.Profile profile) {
+        if (!Branding.isDeveloperMode(this)) return;
+        if (running) {
+            Toast.makeText(this, "Сначала отключи VPN и прокси",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        SecureStore store = new SecureStore(this);
+        LinearLayout page = createPageContent("Публичный сервер",
+                "Для каждого человека сервер создаст отдельный аккаунт. "
+                        + "Админский пароль никогда не публикуется.");
+        EditText name = addServerField(page, "Название в каталоге",
+                profile.name, InputType.TYPE_CLASS_TEXT
+                        | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        EditText location = addServerField(page, "Страна или город",
+                "", InputType.TYPE_CLASS_TEXT
+                        | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        addSectionTitle(page, "Лимиты каждого пользователя");
+        EditText days = addServerField(page, "Срок доступа · дней · 0 навсегда",
+                "30", InputType.TYPE_CLASS_NUMBER);
+        addQuickChoices(page, days, "1", "7", "30", "90");
+        EditText daily = addServerField(page, "Трафик в день · МБ · 0 без лимита",
+                "1024", InputType.TYPE_CLASS_NUMBER);
+        addQuickChoices(page, daily, "256", "1024", "5120", "0");
+        EditText monthly = addServerField(page,
+                "Трафик за 30 дней · МБ · 0 без лимита",
+                "10240", InputType.TYPE_CLASS_NUMBER);
+        addQuickChoices(page, monthly, "5120", "10240", "51200", "0");
+        EditText speed = addServerField(page,
+                "Скорость · Мбит/с · 0 без лимита",
+                "10", InputType.TYPE_CLASS_NUMBER);
+        addQuickChoices(page, speed, "1", "5", "10", "25");
+        EditText maxUsers = addServerField(page,
+                "Максимум активных пользователей",
+                "50", InputType.TYPE_CLASS_NUMBER);
+        addQuickChoices(page, maxUsers, "10", "25", "50", "100");
+        boolean tlsAvailable =
+                TlsTransport.isConfiguredForProfile(store, profile);
+        CheckBox tls = addToggleCard(page, "Выдавать TLS",
+                tlsAvailable
+                        ? "Новые пользователи автоматически получат "
+                        + "TLS-сертификат."
+                        : "TLS на этом сервере не настроен.",
+                tlsAvailable, value -> {
+                });
+        tls.setEnabled(tlsAvailable);
+        LinearLayout warning = createCard();
+        addCardTitle(warning, "Как сервер появится в каталоге");
+        addCardSubtitle(warning,
+                "После настройки откроется GitHub Issue с уже заполненной "
+                        + "публикацией. Нажми Submit new issue. Закрытие Issue "
+                        + "убирает сервер из списка.");
+        page.addView(warning, pageCardParams());
+        Button publish = new Button(this);
+        publish.setText("НАСТРОИТЬ И ОПУБЛИКОВАТЬ");
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(58));
+        params.topMargin = dp(20);
+        page.addView(publish, params);
+        publish.setOnClickListener(v -> {
+            long dayValue = parseLongOrNegative(days);
+            long dailyValue = parseLongOrNegative(daily);
+            long monthlyValue = parseLongOrNegative(monthly);
+            long speedValue = parseLongOrNegative(speed);
+            long maxValue = parseLongOrNegative(maxUsers);
+            String publicName = name.getText().toString().trim();
+            if (publicName.isEmpty() || dayValue < 0 || dayValue > 3650
+                    || dailyValue < 0 || monthlyValue < 0
+                    || speedValue < 0 || maxValue < 1 || maxValue > 1000) {
+                Toast.makeText(this, "Проверь название и лимиты",
+                        Toast.LENGTH_LONG).show();
+                return;
+            }
+            publish.setEnabled(false);
+            publish.setText("ПРОВЕРЯЮ SSH-КЛЮЧ…");
+            ensureSshHostKey(profile, () -> {
+                publish.setText("НАСТРАИВАЮ СЕРВЕР…");
+                speedWorker.execute(() -> {
+                    try {
+                        PublicServerRegistry.Entry entry =
+                                PublicServerManager.publish(
+                                        new SecureStore(this), profile,
+                                        publicName,
+                                        location.getText().toString().trim(),
+                                        (int) dayValue, dailyValue,
+                                        monthlyValue, speedValue,
+                                        (int) maxValue, tls.isChecked());
+                        mainHandler.post(() -> {
+                            Toast.makeText(this,
+                                    "Сервер готов. Подтверди публикацию "
+                                            + "на GitHub.",
+                                    Toast.LENGTH_LONG).show();
+                            openPublicServerPublication(entry);
+                            showServerEditor(profile);
+                        });
+                    } catch (Exception publishError) {
+                        mainHandler.post(() -> {
+                            publish.setEnabled(true);
+                            publish.setText("НАСТРОИТЬ И ОПУБЛИКОВАТЬ");
+                            Toast.makeText(this,
+                                    "Не удалось: "
+                                            + publishError.getMessage(),
+                                    Toast.LENGTH_LONG).show();
+                        });
+                    }
+                });
+            }, () -> {
+                publish.setEnabled(true);
+                publish.setText("НАСТРОИТЬ И ОПУБЛИКОВАТЬ");
+            });
+        });
+        showScrollablePage(page, navAdd);
+    }
+
+    private void openPublicServerPublication(
+            PublicServerRegistry.Entry entry) {
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW,
+                    PublicServerRegistry.publishUri(entry)));
+        } catch (Exception error) {
+            Toast.makeText(this,
+                    "Не удалось открыть GitHub: " + error.getMessage(),
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void showPublishedServerPage(
+            ServerProfiles.Profile profile,
+            PublicServerRegistry.Entry entry) {
+        LinearLayout page = createPageContent("Публичный режим",
+                "Сервер «" + entry.name
+                        + "» выдаёт отдельные аккаунты по правилам ниже.");
+        LinearLayout details = createCard();
+        addCardTitle(details, entry.name);
+        addCardSubtitle(details,
+                (entry.location.isEmpty()
+                        ? "Регион не указан" : entry.location)
+                        + "\n" + entry.limitsLabel()
+                        + "\nTLS: " + (entry.tls ? "да" : "нет")
+                        + "\nPool ID: " + entry.poolId);
+        page.addView(details, pageCardParams());
+        addPageAction(page, "Открыть публикацию GitHub",
+                "Создать Issue или открыть новую заполненную форму",
+                () -> openPublicServerPublication(entry));
+        Button disable = new Button(this);
+        disable.setText("ОТКЛЮЧИТЬ НОВУЮ ВЫДАЧУ");
+        disable.setTextColor(0xFFFF7272);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(56));
+        params.topMargin = dp(18);
+        page.addView(disable, params);
+        disable.setOnClickListener(v -> new AlertDialog.Builder(this)
+                .setTitle("Отключить публичный режим?")
+                .setMessage("Новые люди больше не смогут получать аккаунты. "
+                        + "Уже выданные доступы продолжат работать. "
+                        + "Также закрой GitHub Issue, чтобы убрать запись "
+                        + "из каталога.")
+                .setPositiveButton("Отключить", (dialog, which) -> {
+                    disable.setEnabled(false);
+                    disable.setText("ОТКЛЮЧАЮ…");
+                    speedWorker.execute(() -> {
+                        try {
+                            PublicServerManager.disable(
+                                    new SecureStore(this),
+                                    profile, entry);
+                            mainHandler.post(() -> {
+                                Toast.makeText(this,
+                                        "Новая выдача отключена. "
+                                                + "Закрой GitHub Issue.",
+                                        Toast.LENGTH_LONG).show();
+                                showServerEditor(profile);
+                            });
+                        } catch (Exception error) {
+                            mainHandler.post(() -> {
+                                disable.setEnabled(true);
+                                disable.setText(
+                                        "ОТКЛЮЧИТЬ НОВУЮ ВЫДАЧУ");
+                                Toast.makeText(this,
+                                        "Не удалось отключить: "
+                                                + error.getMessage(),
+                                        Toast.LENGTH_LONG).show();
+                            });
+                        }
+                    });
+                })
+                .setNegativeButton("Отмена", null)
+                .show());
         showScrollablePage(page, navAdd);
     }
 
@@ -2993,14 +3343,38 @@ public class MainActivity extends Activity {
                     + "\nTG / VPN: "
                     + yesNo(intent.getBooleanExtra("debug_tg_running", false))
                     + " / " + yesNo(intent.getBooleanExtra("debug_vpn_running", false))
+                    + "\nЗапрошено TG / VPN: "
+                    + yesNo(intent.getBooleanExtra(
+                    "debug_tg_requested", false))
+                    + " / " + yesNo(intent.getBooleanExtra(
+                    "debug_vpn_requested", false))
                     + "\nАвтопереподключение: "
                     + yesNo(intent.getBooleanExtra("debug_auto_reconnect", true))
                     + "\nОкно/пакет/MTU: "
                     + intent.getStringExtra("debug_tuning")
+                    + "\nРаздельные маршруты: "
+                    + intent.getStringExtra("debug_split")
+                    + "\nЛимиты доступа: "
+                    + intent.getStringExtra("debug_policy")
+                    + "\nSSH-сервер: "
+                    + intent.getStringExtra("debug_server_version")
+                    + "\nSSH host key: "
+                    + intent.getStringExtra("debug_host_key")
+                    + "\nПамять JVM: "
+                    + intent.getStringExtra("debug_memory")
+                    + "\nПотоки / сеть generation: "
+                    + intent.getIntExtra("debug_threads", 0)
+                    + " / " + intent.getLongExtra(
+                    "debug_network_generation", 0)
                     + "\nВремя работы: "
                     + formatDuration(intent.getLongExtra("debug_uptime_ms", 0))
+                    + "\nС последнего подключения: "
+                    + formatDuration(intent.getLongExtra(
+                    "debug_connected_ms", 0))
                     + "\nПопытки подключения: "
-                    + intent.getIntExtra("debug_connect_attempts", 0));
+                    + intent.getIntExtra("debug_connect_attempts", 0)
+                    + "\nПоследняя ошибка: "
+                    + intent.getStringExtra("debug_last_error"));
         }
     }
 
@@ -3104,14 +3478,31 @@ public class MainActivity extends Activity {
     private void ensureSshHostKey(
             ServerProfiles.Profile profile, Runnable onVerified,
             Runnable onCancelled) {
+        ensureSshHostKey(
+                profile, onVerified, onCancelled, false);
+    }
+
+    private void ensureSshHostKeyForced(
+            ServerProfiles.Profile profile, Runnable onVerified) {
+        ensureSshHostKey(profile, onVerified, () -> {
+        }, true);
+    }
+
+    private void ensureSshHostKey(
+            ServerProfiles.Profile profile, Runnable onVerified,
+            Runnable onCancelled, boolean forceCheck) {
+        SecureStore currentStore = new SecureStore(this);
+        if (!forceCheck && !SshHostKeys.trustedFingerprint(
+                currentStore, profile).isEmpty()) {
+            onVerified.run();
+            return;
+        }
         if (hostKeyCheckRunning) {
             Toast.makeText(this, "Проверка ключа SSH уже выполняется",
                     Toast.LENGTH_SHORT).show();
             return;
         }
         hostKeyCheckRunning = true;
-        Toast.makeText(this, "Проверяем ключ SSH-сервера…",
-                Toast.LENGTH_SHORT).show();
         speedWorker.execute(() -> {
             try {
                 SecureStore store = new SecureStore(this);
@@ -3124,11 +3515,14 @@ public class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     hostKeyCheckRunning = false;
                     if (isFinishing() || isDestroyed()) return;
-                    if (trusted) {
+                    if (trusted && !forceCheck) {
                         onVerified.run();
                         return;
                     }
-                    boolean changed = !previousFingerprint.isEmpty();
+                    boolean unchanged =
+                            trusted && !previousFingerprint.isEmpty();
+                    boolean changed =
+                            !trusted && !previousFingerprint.isEmpty();
                     String message = "Сервер: " + scanned.host + ":" + scanned.port
                             + "\nТип ключа: " + scanned.type
                             + "\nНовый fingerprint:\n" + scanned.fingerprint;
@@ -3138,6 +3532,9 @@ public class MainActivity extends Activity {
                                 + "\n\nКлюч сервера изменился. Это может означать "
                                 + "переустановку VPS или попытку перехвата. Продолжай "
                                 + "только после независимой проверки fingerprint.";
+                    } else if (unchanged) {
+                        message += "\n\nКлюч совпадает с ранее закреплённым. "
+                                + "Подмена SSH-сервера не обнаружена.";
                     } else {
                         message += "\n\nСверь fingerprint с сервером или его владельцем. "
                                 + "Пароль не будет отправлен до подтверждения.";
@@ -3145,10 +3542,14 @@ public class MainActivity extends Activity {
                     new AlertDialog.Builder(this)
                             .setTitle(changed
                                     ? "Ключ SSH-сервера изменился"
+                                    : unchanged
+                                    ? "SSH-ключ подтверждён"
                                     : "Подтверди ключ SSH-сервера")
                             .setMessage(message)
                             .setPositiveButton(changed
-                                            ? "Заменить ключ" : "Доверять",
+                                            ? "Заменить ключ"
+                                            : unchanged
+                                            ? "Оставить ключ" : "Доверять",
                                     (ignored, which) -> {
                                         try {
                                             SshHostKeys.trust(

@@ -52,12 +52,17 @@ public class TunnelService extends Service {
     private volatile String currentStatus = "Подключение…";
     private volatile long currentSpeed;
     private volatile int currentLatency = -1;
+    private volatile int connectAttempts;
+    private volatile long serviceStartedAt;
+    private volatile long connectedAt;
+    private volatile String lastError = "нет";
     private static volatile boolean serviceActive;
     private static volatile boolean connected;
 
     @Override public void onCreate() {
         super.onCreate();
         serviceActive = true;
+        serviceStartedAt = SystemClock.elapsedRealtime();
         createChannel();
         connectivityManager = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
         SecureStore store = new SecureStore(this);
@@ -99,6 +104,9 @@ public class TunnelService extends Service {
             lastPolicyBytes = 0;
             lastSampleTime = SystemClock.elapsedRealtime();
             statsTicks = 0;
+            connectAttempts = 0;
+            connectedAt = 0;
+            lastError = "нет";
             startStats();
         }
         wanted = true;
@@ -270,6 +278,7 @@ public class TunnelService extends Service {
                 while (wanted) {
                     forceReconnect = false;
                     try {
+                        connectAttempts++;
                         connectOnce();
                         delaySeconds = 2;
                         monitorConnection();
@@ -277,6 +286,7 @@ public class TunnelService extends Service {
                         if (!wanted) break;
                         connected = false;
                         String message = classifyError(e);
+                        lastError = message;
                         if (!shouldRetryAfterFailure()) {
                             stopAfterFailure(message);
                             break;
@@ -286,6 +296,9 @@ public class TunnelService extends Service {
                         if (!wanted) break;
                         connected = false;
                         String message = "SSH-соединение потеряно.";
+                        lastError = e.getClass().getSimpleName()
+                                + ": " + (e.getMessage() == null
+                                ? message : e.getMessage());
                         if (!shouldRetryAfterFailure()) {
                             stopAfterFailure(message);
                             break;
@@ -367,6 +380,8 @@ public class TunnelService extends Service {
             vpnSocksProxy = newVpnProxy;
             trafficLimiter = newTrafficLimiter;
             connected = true;
+            connectedAt = SystemClock.elapsedRealtime();
+            lastError = "нет";
         } catch (Exception error) {
             if (newTelegramProxy != null) newTelegramProxy.close();
             if (newVpnProxy != null) newVpnProxy.close();
@@ -496,10 +511,111 @@ public class TunnelService extends Service {
                 .putExtra("session_downloaded", traffic[1])
                 .putExtra("total_uploaded", totalUploaded + traffic[0])
                 .putExtra("total_downloaded", totalDownloaded + traffic[1]);
+        addDebugExtras(statsIntent);
         sendBroadcast(statsIntent);
         if (statsTicks % 5 == 0) {
             getSystemService(NotificationManager.class).notify(ID, note(currentStatus));
         }
+    }
+
+    private void addDebugExtras(Intent intent) {
+        if (!Branding.isDeveloperMode(this)) return;
+        SecureStore store = new SecureStore(this);
+        ServerProfiles.Profile profile = ServerProfiles.active(store);
+        Session primary = session;
+        Session secondary = vpnSession;
+        SocksProxy telegram = telegramSocksProxy;
+        SocksProxy vpn = vpnSocksProxy;
+        boolean telegramRunning =
+                telegram != null && telegram.isRunning();
+        boolean vpnRunning = vpn != null && vpn.isRunning();
+        Network network = activeUnderlyingNetwork;
+        String networkText = network == null ? "нет подтверждённой сети"
+                : network.toString();
+        if (network != null) {
+            NetworkCapabilities capabilities =
+                    connectivityManager.getNetworkCapabilities(network);
+            LinkProperties links =
+                    connectivityManager.getLinkProperties(network);
+            networkText += capabilities == null ? ""
+                    : " · down/up "
+                    + capabilities.getLinkDownstreamBandwidthKbps()
+                    + "/" + capabilities.getLinkUpstreamBandwidthKbps()
+                    + " Кбит/с";
+            networkText += links == null ? ""
+                    : " · " + links.getInterfaceName()
+                    + " · DNS " + links.getDnsServers().size();
+        }
+        UserAccessPolicy.Policy policy = profile == null
+                ? null : UserAccessPolicy.load(store, profile.id);
+        String policyText = policy == null || !policy.configured
+                ? "нет"
+                : "день " + policy.dailyMb + " МБ · 30 дней "
+                + policy.monthlyMb + " МБ · " + policy.speedMbps
+                + " Мбит/с";
+        SplitTunnel.Profile split = SplitTunnel.combined(store);
+        String splitText = !SplitTunnel.enabled(store) ? "выключены"
+                : split == null ? "включены, профиль не выбран"
+                : split.name + " · " + split.mode + " · "
+                + split.entries.size() + " записей";
+        Runtime runtime = Runtime.getRuntime();
+        long usedMemory =
+                runtime.totalMemory() - runtime.freeMemory();
+        String hostKey = profile == null ? "нет профиля"
+                : SshHostKeys.trustedFingerprint(store, profile);
+        intent.putExtra("debug_enabled", true)
+                .putExtra("debug_version", BuildConfig.VERSION_NAME
+                        + " (" + BuildConfig.VERSION_CODE + ")")
+                .putExtra("debug_profile", profile == null ? "нет"
+                        : profile.name + " · " + profile.id)
+                .putExtra("debug_status", currentStatus)
+                .putExtra("debug_ssh_connected",
+                        primary != null && primary.isConnected())
+                .putExtra("debug_ssh_sessions",
+                        (primary != null && primary.isConnected() ? 1 : 0)
+                                + (secondary != null
+                                && secondary.isConnected() ? 1 : 0))
+                .putExtra("debug_ssh_endpoint", profile == null ? "—"
+                        : profile.host + ":" + profile.sshPort)
+                .putExtra("debug_transport",
+                        TlsTransport.isEnabledFor(
+                                store, store.getPlain("host", ""))
+                                ? "TLS:" + TlsTransport.port(store)
+                                : "обычный SSH")
+                .putExtra("debug_mode", TunnelMode.label(store))
+                .putExtra("debug_network", networkText)
+                .putExtra("debug_socks_ports", TunnelMode.portsLabel(store))
+                .putExtra("debug_tg_running", telegramRunning)
+                .putExtra("debug_vpn_running", vpnRunning)
+                .putExtra("debug_tg_requested",
+                        store.getBoolean("telegram_proxy", true))
+                .putExtra("debug_vpn_requested",
+                        store.getBoolean("vpn_mode", false))
+                .putExtra("debug_auto_reconnect",
+                        store.getBoolean("auto_reconnect", true))
+                .putExtra("debug_tuning",
+                        NetworkTuning.windowKiB(store) + "/"
+                                + NetworkTuning.packetKiB(store) + "/"
+                                + NetworkTuning.vpnMtu(store))
+                .putExtra("debug_split", splitText)
+                .putExtra("debug_policy", policyText)
+                .putExtra("debug_server_version",
+                        primary == null ? "—"
+                                : String.valueOf(primary.getServerVersion()))
+                .putExtra("debug_host_key",
+                        hostKey == null || hostKey.isEmpty() ? "нет" : hostKey)
+                .putExtra("debug_memory",
+                        usedMemory / 1048576 + " / "
+                                + runtime.maxMemory() / 1048576 + " МБ")
+                .putExtra("debug_threads", Thread.activeCount())
+                .putExtra("debug_network_generation",
+                        networkSwitchGeneration)
+                .putExtra("debug_uptime_ms",
+                        SystemClock.elapsedRealtime() - serviceStartedAt)
+                .putExtra("debug_connected_ms", connectedAt <= 0 ? 0
+                        : SystemClock.elapsedRealtime() - connectedAt)
+                .putExtra("debug_connect_attempts", connectAttempts)
+                .putExtra("debug_last_error", lastError);
     }
 
     private int parsePort(String value, int fallback) {

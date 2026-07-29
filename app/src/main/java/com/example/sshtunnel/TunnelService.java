@@ -100,6 +100,7 @@ public class TunnelService extends Service {
         }
 
         SecureStore store = new SecureStore(this);
+        QuickSettingsModeHistory.remember(store);
         if (intent == null && !store.getBoolean("enabled", false)) {
             stopSelf();
             return START_NOT_STICKY;

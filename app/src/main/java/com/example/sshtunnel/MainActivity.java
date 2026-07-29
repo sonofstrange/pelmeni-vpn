@@ -266,7 +266,9 @@ public class MainActivity extends Activity {
         navSettings.setOnClickListener(v -> showSettingsHub());
         navAdd.setOnClickListener(v -> showAddServerChoice());
         setSelectedNav(navHome);
-        if (getIntent().getBooleanExtra(EXTRA_START_FROM_TILE, false)) {
+        if (isQuickSettingsPreferences(getIntent())) {
+            showHomePage();
+        } else if (getIntent().getBooleanExtra(EXTRA_START_FROM_TILE, false)) {
             getIntent().removeExtra(EXTRA_START_FROM_TILE);
             toggle.post(() -> {
                 if (!running) startTunnel();
@@ -277,6 +279,17 @@ public class MainActivity extends Activity {
             showAppSplitTunnelPage();
         }
         maybeCheckForUpdate(false);
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (isQuickSettingsPreferences(intent)) showHomePage();
+    }
+
+    private static boolean isQuickSettingsPreferences(Intent intent) {
+        return intent != null && android.service.quicksettings.TileService
+                .ACTION_QS_TILE_PREFERENCES.equals(intent.getAction());
     }
 
     @Override public void onBackPressed() {
@@ -4006,6 +4019,7 @@ public class MainActivity extends Activity {
     }
 
     private void applyLiveModeChange(boolean vpnChanged, boolean checked) {
+        QuickSettingsModeHistory.remember(new SecureStore(this));
         if (!enableVpn.isChecked() && !enableTelegram.isChecked()) {
             proxyConnecting = false;
             vpnConnecting = false;

@@ -92,6 +92,23 @@ public class MainActivitySecurityTest {
         assertTrue(service.contains("ServerProfiles.activate(store, next.id)"));
     }
 
+    @Test public void quickSettingsTileRestoresModeAndLongPressOpensHome()
+            throws IOException {
+        String manifest = readProjectFile("app/src/main/AndroidManifest.xml");
+        String activity = readProjectFile(
+                "app/src/main/java/com/example/sshtunnel/MainActivity.java");
+        String tile = readProjectFile(
+                "app/src/main/java/com/example/sshtunnel/QuickSettingsTileService.java");
+
+        assertTrue(manifest.contains(
+                "android.service.quicksettings.action.QS_TILE_PREFERENCES"));
+        assertTrue(manifest.contains(
+                "android:permission=\"android.permission.BIND_QUICK_SETTINGS_TILE\""));
+        assertTrue(activity.contains("isQuickSettingsPreferences(getIntent())"));
+        assertTrue(activity.contains("showHomePage();"));
+        assertTrue(tile.contains("QuickSettingsModeHistory.restore(store)"));
+    }
+
     private static String readProjectFile(String relative) throws IOException {
         Path directory = Path.of(System.getProperty("user.dir")).toAbsolutePath();
         Path fromRoot = directory.resolve(relative);

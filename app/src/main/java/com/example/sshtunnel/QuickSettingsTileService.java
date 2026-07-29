@@ -31,8 +31,10 @@ public class QuickSettingsTileService extends TileService {
             return;
         }
         if (store.getBoolean("enabled", false)) store.putBoolean("enabled", false);
-        boolean vpnMode = store.getBoolean("vpn_mode", false);
-        boolean proxyMode = store.getBoolean("telegram_proxy", false);
+        QuickSettingsModeHistory.Mode mode =
+                QuickSettingsModeHistory.restore(store);
+        boolean vpnMode = mode.vpn;
+        boolean proxyMode = mode.proxy;
         boolean setupRequired = ServerProfiles.active(store) == null
                 || (!vpnMode && !proxyMode)
                 || SshHostKeys.trustedFingerprint(store).isEmpty();

@@ -109,6 +109,20 @@ public class MainActivitySecurityTest {
         assertTrue(tile.contains("QuickSettingsModeHistory.restore(store)"));
     }
 
+    @Test public void quickSettingsTileAndActivityShareRuntimeState()
+            throws IOException {
+        String activity = readProjectFile(
+                "app/src/main/java/com/example/sshtunnel/MainActivity.java");
+        String tile = readProjectFile(
+                "app/src/main/java/com/example/sshtunnel/QuickSettingsTileService.java");
+
+        assertTrue(activity.contains("syncModeSelectionFromStore();"));
+        assertTrue(activity.contains("refreshRuntimeState();"));
+        assertTrue(activity.contains("TunnelService.isActive()"));
+        assertTrue(activity.contains("TunnelService.isConnected()"));
+        assertTrue(tile.contains("store.putBoolean(\"enabled\", false);"));
+    }
+
     private static String readProjectFile(String relative) throws IOException {
         Path directory = Path.of(System.getProperty("user.dir")).toAbsolutePath();
         Path fromRoot = directory.resolve(relative);

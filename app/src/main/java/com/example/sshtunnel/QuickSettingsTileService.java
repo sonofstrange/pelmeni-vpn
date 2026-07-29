@@ -26,6 +26,9 @@ public class QuickSettingsTileService extends TileService {
         SecureStore store = new SecureStore(this);
         boolean running = store.getBoolean("enabled", false) && TunnelService.isActive();
         if (running) {
+            // Persist the user's intent before STOP is handled so the tile and
+            // an already visible activity become inactive immediately.
+            store.putBoolean("enabled", false);
             startService(new Intent(this, TunnelService.class).setAction(TunnelService.STOP));
             updateTile();
             return;

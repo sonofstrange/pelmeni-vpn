@@ -116,6 +116,7 @@ public class MainActivity extends Activity {
                 updateDebugPanel();
                 return;
             }
+            syncModeSelectionFromStore();
             if (intent.getBooleanExtra(
                     TunnelService.EXTRA_SERVER_CHANGED, false)) {
                 loadSettings();
@@ -2127,6 +2128,7 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED);
         else registerReceiver(receiver, filter);
         receiverRegistered = true;
+        refreshRuntimeState();
     }
 
     @Override protected void onStop() {
@@ -2174,6 +2176,32 @@ public class MainActivity extends Activity {
         updateServerCard();
         updateModeButtons();
         updateAccessLimitSummary();
+    }
+
+    private void syncModeSelectionFromStore() {
+        SecureStore store = new SecureStore(this);
+        boolean vpnEnabled = store.getBoolean("vpn_mode", false);
+        boolean proxyEnabled =
+                store.getBoolean("telegram_proxy", !vpnEnabled);
+        suppressModeChanges = true;
+        try {
+            enableVpn.setChecked(vpnEnabled);
+            enableTelegram.setChecked(proxyEnabled);
+        } finally {
+            suppressModeChanges = false;
+        }
+    }
+
+    private void refreshRuntimeState() {
+        syncModeSelectionFromStore();
+        SecureStore store = new SecureStore(this);
+        boolean active = store.getBoolean("enabled", false)
+                && TunnelService.isActive();
+        String text = !active ? "Отключено"
+                : TunnelService.isConnected()
+                ? "Подключено · " + TunnelMode.portsLabel(store)
+                : "Подключение…";
+        update(text, active);
     }
 
     private void toggleModeFromButton(boolean vpn) {

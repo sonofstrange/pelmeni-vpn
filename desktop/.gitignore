@@ -1,0 +1,12 @@
+build/
+dist/
+test-appdata/
+visual-qa/
+__pycache__/
+*.py[cod]
+*.spec
+
+# Private debug activator and its signing key stay local.
+developer_control.pyw
+build-dev-control.ps1
+dev-control-version-info.txt

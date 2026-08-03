@@ -1,0 +1,7 @@
+paramiko>=3.5,<5
+cryptography>=43,<46
+PySide6>=6.7,<7
+PySocks>=1.7,<2
+Pillow>=10,<13
+customtkinter>=5.2.2,<6
+pyinstaller>=6.10,<7

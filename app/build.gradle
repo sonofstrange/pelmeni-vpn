@@ -20,8 +20,8 @@ android {
         applicationId 'com.example.sshtunnel'
         minSdk 26
         targetSdk 35
-        versionCode 65
-        versionName '1.31'
+        versionCode 66
+        versionName '1.32'
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
     }
 
@@ -52,7 +52,7 @@ android {
 }
 
 tasks.configureEach { task ->
-    if (task.name ==~ /(?i).*(assemble|bundle|package|sign).*Release.*/) {
+    if (task.name ==~ /(?i)^(assembleRelease|bundleRelease|packageRelease|signRelease.*)$/) {
         task.doFirst {
             if (!releaseSigningReady) {
                 throw new GradleException(

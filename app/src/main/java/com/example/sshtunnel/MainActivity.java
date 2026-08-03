@@ -1013,32 +1013,36 @@ public class MainActivity extends Activity {
                 startOnBoot.isChecked(), checked -> startOnBoot.setChecked(checked));
 
         addSectionTitle(page, "Обновления");
-        LinearLayout channel = createCard();
-        addCardTitle(channel, "Канал обновлений");
-        addCardSubtitle(channel, Branding.isDeveloperMode(this)
-                ? "В debug-режиме можно получать тестовые сборки."
-                : "Beta-канал доступен только в Huyna debug mode.");
-        RadioGroup channels = new RadioGroup(this);
-        channels.setOrientation(RadioGroup.VERTICAL);
-        RadioButton stable = createRadio("Стабильные версии",
-                "Только проверенные полноценные релизы");
-        RadioButton beta = createRadio("Beta и стабильные",
-                "Новые функции раньше, возможны ошибки");
-        beta.setEnabled(Branding.isDeveloperMode(this));
-        channels.addView(stable);
-        channels.addView(beta);
-        boolean betaEnabled = Branding.isDeveloperMode(this)
-                && new SecureStore(this).getBoolean("beta_updates", false);
-        (betaEnabled ? beta : stable).setChecked(true);
-        channels.setOnCheckedChangeListener((group, checkedId) ->
-                new SecureStore(this).putBoolean("beta_updates",
-                        checkedId == beta.getId() && beta.isEnabled()));
-        channel.addView(channels);
-        page.addView(channel, pageCardParams());
+        boolean developerUpdates = Branding.isDeveloperMode(this);
+        if (!developerUpdates) {
+            settingsStore.putBoolean("beta_updates", false);
+        } else {
+            LinearLayout channel = createCard();
+            addCardTitle(channel, "Канал обновлений");
+            addCardSubtitle(channel,
+                    "В debug-режиме можно получать тестовые сборки.");
+            RadioGroup channels = new RadioGroup(this);
+            channels.setOrientation(RadioGroup.VERTICAL);
+            RadioButton stable = createRadio("Стабильные версии",
+                    "Только проверенные полноценные релизы");
+            RadioButton beta = createRadio("Beta и стабильные",
+                    "Новые функции раньше, возможны ошибки");
+            channels.addView(stable);
+            channels.addView(beta);
+            boolean betaEnabled = settingsStore.getBoolean(
+                    "beta_updates", false);
+            (betaEnabled ? beta : stable).setChecked(true);
+            channels.setOnCheckedChangeListener((group, checkedId) ->
+                    settingsStore.putBoolean("beta_updates",
+                            checkedId == beta.getId()));
+            channel.addView(channels);
+            page.addView(channel, pageCardParams());
+        }
         addPageAction(page, "Проверить обновления сейчас",
-                "Проверка выбранного выше канала",
-                () -> maybeCheckForUpdate(true, Branding.isDeveloperMode(this)
-                        && new SecureStore(this).getBoolean("beta_updates", false)));
+                developerUpdates
+                        ? "Проверка выбранного канала"
+                        : "Проверить наличие новой стабильной версии",
+                () -> maybeCheckForUpdate(true));
 
         addSectionTitle(page, "Конфиги и инструменты");
         addPageAction(page, "Импортировать конфиг",

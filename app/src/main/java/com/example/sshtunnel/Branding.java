@@ -21,7 +21,11 @@ final class Branding {
     }
 
     static boolean setDeveloperMode(Context context, boolean enabled) {
-        new SecureStore(context).putBoolean(STATE_KEY, enabled);
+        SecureStore store = new SecureStore(context);
+        store.putBoolean(STATE_KEY, enabled);
+        if (!enabled) {
+            store.putBoolean("beta_updates", false);
+        }
         applyLauncherState(context, enabled);
         return enabled;
     }

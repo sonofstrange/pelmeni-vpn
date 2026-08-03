@@ -123,6 +123,33 @@ public class MainActivitySecurityTest {
         assertTrue(tile.contains("store.putBoolean(\"enabled\", false);"));
     }
 
+    @Test public void officialModeOnlyExposesStableUpdates()
+            throws IOException {
+        String activity = readProjectFile(
+                "app/src/main/java/com/example/sshtunnel/MainActivity.java");
+        String branding = readProjectFile(
+                "app/src/main/java/com/example/sshtunnel/Branding.java");
+        String layout = readProjectFile(
+                "app/src/main/res/layout/activity_main.xml");
+
+        assertTrue(activity.contains("if (!developerUpdates)"));
+        assertTrue(activity.contains("() -> maybeCheckForUpdate(true)"));
+        assertTrue(branding.contains(
+                "store.putBoolean(\"beta_updates\", false)"));
+        assertFalse(activity.contains("Beta-канал доступен только"));
+        assertFalse(layout.contains(
+                "SSH-туннель с быстрым переключением серверов"));
+    }
+
+    @Test public void signingGuardDoesNotBlockReleaseTestsOrLint()
+            throws IOException {
+        String build = readProjectFile("app/build.gradle");
+
+        assertTrue(build.contains(
+                "^(assembleRelease|bundleRelease|packageRelease|signRelease.*)$"));
+        assertFalse(build.contains(
+                ".*(assemble|bundle|package|sign).*Release.*"));
+    }
     private static String readProjectFile(String relative) throws IOException {
         Path directory = Path.of(System.getProperty("user.dir")).toAbsolutePath();
         Path fromRoot = directory.resolve(relative);

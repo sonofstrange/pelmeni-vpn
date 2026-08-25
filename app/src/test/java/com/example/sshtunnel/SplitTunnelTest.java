@@ -20,4 +20,13 @@ public class SplitTunnelTest {
                 Arrays.asList("https://example.com/path", "EXAMPLE.COM"));
         assertEquals(Arrays.asList("example.com"), profile.entries);
     }
+
+    @Test public void cidrContainsAndOverlaps() {
+        SplitTunnel.Cidr parent = new SplitTunnel.Cidr(0, 0); // 0.0.0.0/0
+        SplitTunnel.Cidr child = new SplitTunnel.Cidr(0x0a000000, 8); // 10.0.0.0/8
+        assertEquals(true, parent.contains(child));
+        assertEquals(false, child.contains(parent));
+        assertEquals(true, parent.overlaps(child));
+        assertEquals(true, child.overlaps(parent));
+    }
 }

@@ -91,7 +91,7 @@ final class SocksProxy implements AutoCloseable {
 
     private void handle(Socket client) {
         ChannelDirectTCPIP channel = null;
-        try (Socket ignored = client) {
+        try (Socket clientSocket = client) {
             client.setTcpNoDelay(true);
             client.setSoTimeout(15_000);
             InputStream input = client.getInputStream();
@@ -137,8 +137,20 @@ final class SocksProxy implements AutoCloseable {
             output.write(new byte[] {5, 0, 0, 1, 0, 0, 0, 0, 0, 0});
             output.flush();
 
-            clients.execute(() -> copy(input, channelOutput, uploadedBytes));
-            copy(channelInput, output, downloadedBytes);
+            ChannelDirectTCPIP activeChannel = channel;
+            clients.execute(() -> {
+                try {
+                    copy(input, channelOutput, uploadedBytes);
+                } finally {
+                    try { client.shutdownInput(); } catch (Exception ignoredShutdown) {}
+                    try { activeChannel.disconnect(); } catch (Exception ignoredDisconnect) {}
+                }
+            });
+            try {
+                copy(channelInput, output, downloadedBytes);
+            } finally {
+                try { client.shutdownOutput(); } catch (Exception ignoredShutdown) {}
+            }
         } catch (Exception ignored) {
             // The client receives a closed socket when SSH or the target is unavailable.
         } finally {

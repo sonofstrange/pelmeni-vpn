@@ -244,6 +244,11 @@ final class TlsTransport {
                         chain[chain.length - 1]);
                 break;
             }
+            Certificate cert = keyStore.getCertificate(alias);
+            if (cert != null) {
+                trustStore.setCertificateEntry("pelmeni-ca", cert);
+                break;
+            }
         }
         if (!trustStore.aliases().hasMoreElements()) {
             throw new IOException("TLS CA certificate is missing");

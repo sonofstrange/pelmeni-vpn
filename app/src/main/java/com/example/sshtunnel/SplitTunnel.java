@@ -196,14 +196,17 @@ public final class SplitTunnel {
         }
 
         public void apply(VpnService.Builder builder) throws Exception {
+            builder.addDnsServer("198.18.0.2");
             if (!enabled) {
-                builder.addRoute("0.0.0.0", 0).addDnsServer("198.18.0.2");
+                builder.addRoute("0.0.0.0", 0);
                 return;
             }
             if (MODE_ONLY.equals(mode)) {
                 if (routes.isEmpty()) {
                     throw new IllegalStateException("В активном списке нет доступных IP");
                 }
+                builder.addRoute("198.18.0.2", 32);
+                builder.addRoute("240.0.0.0", 4);
                 for (Cidr route : routes) builder.addRoute(route.address(), route.prefix);
                 return;
             }

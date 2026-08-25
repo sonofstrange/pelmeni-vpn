@@ -40,22 +40,41 @@ final class UserTrafficLimiter {
         nextAvailableNanos = System.nanoTime();
     }
 
-    synchronized int acquire(int requested) throws InterruptedException {
-        refreshPeriods();
-        long remaining = Long.MAX_VALUE;
-        if (dailyLimitBytes > 0) {
-            remaining = Math.min(remaining, dailyLimitBytes - dayUsed);
+    int acquire(int requested) throws InterruptedException {
+        long waitNanos = 0;
+        long allowed;
+        synchronized (this) {
+            refreshPeriods();
+            long remaining = Long.MAX_VALUE;
+            if (dailyLimitBytes > 0) {
+                remaining = Math.min(remaining, dailyLimitBytes - dayUsed);
+            }
+            if (monthlyLimitBytes > 0) {
+                remaining = Math.min(remaining, monthlyLimitBytes - monthUsed);
+            }
+            if (remaining <= 0) return 0;
+            long withOverage = remaining > Long.MAX_VALUE - MAX_FINAL_BLOCK_OVERAGE
+                    ? Long.MAX_VALUE : remaining + MAX_FINAL_BLOCK_OVERAGE;
+            allowed = Math.min(requested, withOverage);
+            if (bytesPerSecond > 0) {
+                long now = System.nanoTime();
+                long start = Math.max(now, nextAvailableNanos);
+                long duration = Math.max(1,
+                        (allowed * 1_000_000_000L + bytesPerSecond - 1) / bytesPerSecond);
+                nextAvailableNanos = start + duration;
+                long wait = start - now;
+                if (wait > 0) {
+                    waitNanos = wait;
+                }
+            }
+            dayUsed += allowed;
+            monthUsed += allowed;
         }
-        if (monthlyLimitBytes > 0) {
-            remaining = Math.min(remaining, monthlyLimitBytes - monthUsed);
+        if (waitNanos > 0) {
+            long millis = waitNanos / 1_000_000L;
+            int nanos = (int) (waitNanos % 1_000_000L);
+            Thread.sleep(millis, nanos);
         }
-        if (remaining <= 0) return 0;
-        long withOverage = remaining > Long.MAX_VALUE - MAX_FINAL_BLOCK_OVERAGE
-                ? Long.MAX_VALUE : remaining + MAX_FINAL_BLOCK_OVERAGE;
-        long allowed = Math.min(requested, withOverage);
-        throttle(allowed);
-        dayUsed += allowed;
-        monthUsed += allowed;
         return (int) allowed;
     }
 
@@ -73,20 +92,6 @@ final class UserTrafficLimiter {
             monthPeriod = currentMonth;
             monthUsed = 0;
         }
-    }
-
-    private void throttle(long bytes) throws InterruptedException {
-        if (bytesPerSecond <= 0) return;
-        long now = System.nanoTime();
-        long start = Math.max(now, nextAvailableNanos);
-        long duration = Math.max(1,
-                (bytes * 1_000_000_000L + bytesPerSecond - 1) / bytesPerSecond);
-        nextAvailableNanos = start + duration;
-        long wait = start - now;
-        if (wait <= 0) return;
-        long millis = wait / 1_000_000L;
-        int nanos = (int) (wait % 1_000_000L);
-        Thread.sleep(millis, nanos);
     }
 
     private static long toBytes(long megabytes) {

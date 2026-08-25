@@ -28,4 +28,30 @@ public class UserTrafficLimiterTest {
 
         assertEquals(0, limiter.acquire(4096));
     }
+
+    @Test public void concurrentAcquisitionDoesNotDeadlock() throws Exception {
+        UserTrafficLimiter limiter = new UserTrafficLimiter();
+        limiter.refresh(
+                new UserAccessPolicy.Policy(
+                        true, "", 100, 1000, 10, 0,
+                        System.currentTimeMillis() / 1000L),
+                new UserAccessPolicy.Usage(0, 0, 0, 0, 0));
+
+        Thread t1 = new Thread(() -> {
+            try {
+                limiter.acquire(1024);
+            } catch (InterruptedException ignored) {}
+        });
+        Thread t2 = new Thread(() -> {
+            try {
+                limiter.acquire(1024);
+            } catch (InterruptedException ignored) {}
+        });
+        t1.start();
+        t2.start();
+        t1.join(2000);
+        t2.join(2000);
+        assertEquals(Thread.State.TERMINATED, t1.getState());
+        assertEquals(Thread.State.TERMINATED, t2.getState());
+    }
 }

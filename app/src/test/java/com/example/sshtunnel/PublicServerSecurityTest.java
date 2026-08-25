@@ -35,6 +35,7 @@ public class PublicServerSecurityTest {
         assertTrue(source.contains("'monthly_mb':int(cfg.get('monthly_mb',0))"));
         assertTrue(source.contains("'speed_mbps':int(cfg.get('speed_mbps',0))"));
         assertTrue(source.contains("Повтори выдачу через минуту."));
+        assertTrue(source.contains("entry.registrarUser.replaceAll(\"[^a-zA-Z0-9_-]\", \"\")"));
     }
 
     @Test public void developerStatsReportActualProxyState()

@@ -192,7 +192,9 @@ final class ApkUpdateInstaller {
         }
         String releaseVersion = expectedVersion.replaceFirst("^[vV]", "");
         if (archive.versionName == null
-                || !releaseVersion.equals(archive.versionName)) {
+                || (!releaseVersion.equals(archive.versionName)
+                && !releaseVersion.startsWith(archive.versionName + "-")
+                && !archive.versionName.startsWith(releaseVersion + "-"))) {
             apk.delete();
             throw new Exception("Версия внутри APK не совпадает с релизом.");
         }

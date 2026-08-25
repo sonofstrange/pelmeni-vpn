@@ -84,8 +84,12 @@ final class PublicServerManager {
         if (pool.length() != entry.poolId.length() || pool.isEmpty()) {
             throw new Exception("Повреждены настройки публичного режима.");
         }
+        String safeUser = entry.registrarUser.replaceAll("[^a-zA-Z0-9_-]", "");
+        if (safeUser.length() != entry.registrarUser.length() || safeUser.isEmpty()) {
+            throw new Exception("Повреждено имя регистратора публичного режима.");
+        }
         String script = "set -Eeuo pipefail\n"
-                + "userdel -r '" + entry.registrarUser + "' "
+                + "userdel -r '" + safeUser + "' "
                 + ">/dev/null 2>&1 || true\n"
                 + "rm -f '/etc/sudoers.d/pelmeni-public-" + pool + "'\n"
                 + "rm -f '/etc/ssh/sshd_config.d/91-pelmeni-public-"

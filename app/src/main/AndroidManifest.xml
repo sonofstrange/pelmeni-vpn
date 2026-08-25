@@ -104,7 +104,6 @@
         <service
             android:name=".VpnTunnelService"
             android:exported="false"
-            android:process=":vpn"
             android:permission="android.permission.BIND_VPN_SERVICE"
             android:foregroundServiceType="specialUse">
             <intent-filter>

@@ -150,6 +150,21 @@ public class MainActivitySecurityTest {
         assertFalse(build.contains(
                 ".*(assemble|bundle|package|sign).*Release.*"));
     }
+
+    @Test public void vpnTunnelServiceRunsInMainProcessAndSpeedTestUsesProxy()
+            throws IOException {
+        String manifest = readProjectFile("app/src/main/AndroidManifest.xml");
+        String speedTest = readProjectFile(
+                "app/src/main/java/com/example/sshtunnel/TunnelSpeedTest.java");
+        String activity = readProjectFile(
+                "app/src/main/java/com/example/sshtunnel/MainActivity.java");
+
+        assertFalse(manifest.contains("android:process=\":vpn\""));
+        assertTrue(speedTest.contains("Proxy.Type.SOCKS"));
+        assertFalse(speedTest.contains("throughVpn"));
+        assertTrue(activity.contains("validHost"));
+        assertTrue(activity.contains("limitWarningDialog"));
+    }
     private static String readProjectFile(String relative) throws IOException {
         Path directory = Path.of(System.getProperty("user.dir")).toAbsolutePath();
         Path fromRoot = directory.resolve(relative);

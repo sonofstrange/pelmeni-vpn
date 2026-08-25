@@ -106,6 +106,7 @@ public class MainActivity extends Activity {
     private volatile boolean updateCheckRunning;
     private volatile boolean hostKeyCheckRunning;
     private UpdateChecker.Result pendingUpdate;
+    private AlertDialog limitWarningDialog;
     private final ExecutorService speedWorker = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
@@ -123,12 +124,14 @@ public class MainActivity extends Activity {
             }
             if (intent.hasExtra("speed_bps")) updateStats(intent);
             String limitWarning = intent.getStringExtra("limit_warning");
-            if (limitWarning != null) {
-                new AlertDialog.Builder(MainActivity.this)
-                        .setTitle("Лимит доступа")
-                        .setMessage(limitWarning)
-                        .setPositiveButton("Понятно", null)
-                        .show();
+            if (limitWarning != null && !isFinishing() && !isDestroyed()) {
+                if (limitWarningDialog == null || !limitWarningDialog.isShowing()) {
+                    limitWarningDialog = new AlertDialog.Builder(MainActivity.this)
+                            .setTitle("Лимит доступа")
+                            .setMessage(limitWarning)
+                            .setPositiveButton("Понятно", null)
+                            .show();
+                }
             }
             String nextStatus = intent.getStringExtra("status");
             if (nextStatus != null) {
@@ -2146,6 +2149,10 @@ public class MainActivity extends Activity {
     @Override protected void onDestroy() {
         ringTelegram.setConnecting(false);
         ringVpn.setConnecting(false);
+        if (limitWarningDialog != null && limitWarningDialog.isShowing()) {
+            limitWarningDialog.dismiss();
+            limitWarningDialog = null;
+        }
         speedWorker.shutdownNow();
         super.onDestroy();
     }
@@ -2212,14 +2219,17 @@ public class MainActivity extends Activity {
         if (!running) {
             suppressModeChanges = true;
             try {
-                enableVpn.setChecked(vpn);
-                enableTelegram.setChecked(!vpn);
+                if (vpn) {
+                    enableVpn.setChecked(true);
+                } else {
+                    enableTelegram.setChecked(true);
+                }
             } finally {
                 suppressModeChanges = false;
             }
             SecureStore store = new SecureStore(this);
-            store.putBoolean("vpn_mode", vpn);
-            store.putBoolean("telegram_proxy", !vpn);
+            store.putBoolean("vpn_mode", enableVpn.isChecked());
+            store.putBoolean("telegram_proxy", enableTelegram.isChecked());
             updateModeButtons();
             startTunnel();
             return;
@@ -2297,7 +2307,7 @@ public class MainActivity extends Activity {
     }
 
     private boolean validHost(String value) {
-        return value.matches("[A-Za-z0-9._:-]+") && !value.contains(" ");
+        return value.matches("[A-Za-z0-9._:\\[\\]-]+") && !value.contains(" ");
     }
 
     private boolean validPort(String value) {
@@ -4047,7 +4057,7 @@ public class MainActivity extends Activity {
                         .setAction(VpnTunnelService.START), new SecureStore(this));
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(vpnIntent);
         else startService(vpnIntent);
-        update("Starting VPN...");
+        update("Подключение VPN…");
     }
 
     private void applyLiveModeChange(boolean vpnChanged, boolean checked) {

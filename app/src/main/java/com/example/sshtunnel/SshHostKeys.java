@@ -65,6 +65,9 @@ final class SshHostKeys {
         } catch (JSchException authenticationExpected) {
             // Most servers reject the "none" method after key exchange. The host
             // key is already available and no password has been transmitted.
+            if (session.getHostKey() == null) {
+                throw authenticationExpected;
+            }
         }
         try {
             HostKey hostKey = session.getHostKey();

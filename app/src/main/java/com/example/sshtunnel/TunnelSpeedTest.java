@@ -25,24 +25,23 @@ final class TunnelSpeedTest {
 
     static Result run(SecureStore store, int downloadBytes, int uploadBytes) throws Exception {
         int socksPort = TunnelMode.testSocksPort(store);
-        boolean throughVpn = store.getBoolean("vpn_mode", false);
-        measureLatency(socksPort, throughVpn);
+        measureLatency(socksPort);
         int[] latency = {
-                measureLatency(socksPort, throughVpn),
-                measureLatency(socksPort, throughVpn),
-                measureLatency(socksPort, throughVpn)
+                measureLatency(socksPort),
+                measureLatency(socksPort),
+                measureLatency(socksPort)
         };
         Arrays.sort(latency);
-        long download = measureDownload(socksPort, throughVpn, downloadBytes);
+        long download = measureDownload(socksPort, downloadBytes);
         long upload = uploadBytes > 0
-                ? measureUpload(socksPort, throughVpn, uploadBytes) : -1;
+                ? measureUpload(socksPort, uploadBytes) : -1;
         return new Result(latency[1], download, upload);
     }
 
-    private static int measureLatency(int socksPort, boolean throughVpn) throws Exception {
+    private static int measureLatency(int socksPort) throws Exception {
         HttpsURLConnection connection = open(
                 "https://speed.cloudflare.com/__down?bytes=0&r=" + System.nanoTime(),
-                socksPort, throughVpn);
+                socksPort);
         long started = System.nanoTime();
         try (InputStream input = connection.getInputStream()) {
             input.read();
@@ -53,11 +52,11 @@ final class TunnelSpeedTest {
     }
 
     private static long measureDownload(
-            int socksPort, boolean throughVpn, int requestedBytes) throws Exception {
+            int socksPort, int requestedBytes) throws Exception {
         HttpsURLConnection connection = open(
                 "https://speed.cloudflare.com/__down?bytes=" + requestedBytes
                         + "&r=" + System.nanoTime(),
-                socksPort, throughVpn);
+                socksPort);
         byte[] buffer = new byte[64 * 1024];
         long received = 0;
         long started = System.nanoTime();
@@ -70,10 +69,10 @@ final class TunnelSpeedTest {
     }
 
     private static long measureUpload(
-            int socksPort, boolean throughVpn, int bytes) throws Exception {
+            int socksPort, int bytes) throws Exception {
         HttpsURLConnection connection = open(
                 "https://speed.cloudflare.com/__up?r=" + System.nanoTime(),
-                socksPort, throughVpn);
+                socksPort);
         connection.setRequestMethod("POST");
         connection.setDoOutput(true);
         connection.setFixedLengthStreamingMode(bytes);
@@ -107,15 +106,10 @@ final class TunnelSpeedTest {
     }
 
     private static HttpsURLConnection open(
-            String address, int socksPort, boolean throughVpn) throws Exception {
-        HttpsURLConnection connection;
-        if (throughVpn) {
-            connection = (HttpsURLConnection) new URL(address).openConnection();
-        } else {
-            Proxy proxy = new Proxy(Proxy.Type.SOCKS,
-                    new InetSocketAddress("127.0.0.1", socksPort));
-            connection = (HttpsURLConnection) new URL(address).openConnection(proxy);
-        }
+            String address, int socksPort) throws Exception {
+        Proxy proxy = new Proxy(Proxy.Type.SOCKS,
+                new InetSocketAddress("127.0.0.1", socksPort));
+        HttpsURLConnection connection = (HttpsURLConnection) new URL(address).openConnection(proxy);
         connection.setConnectTimeout(15_000);
         connection.setReadTimeout(20_000);
         connection.setUseCaches(false);

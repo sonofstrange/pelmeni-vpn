@@ -12,7 +12,7 @@ public final class ChannelTuning {
         channel.setLocalPacketSize(packetSize);
         
         int pipeBufferSize = 128 * 1024;
-        Channel.MyPipedInputStream in = new Channel.MyPipedInputStream(pipeBufferSize, 1000);
+        Channel.MyPipedInputStream in = new Channel.MyPipedInputStream(pipeBufferSize, 0);
         channel.io.setInputStream(in);
         return in;
     }

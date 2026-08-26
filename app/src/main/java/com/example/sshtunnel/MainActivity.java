@@ -390,72 +390,7 @@ public class MainActivity extends Activity {
             page.addView(empty, pageCardParams());
         }
         for (ServerAccessManager.ManagedUser managed : personalUsers) {
-            LinearLayout card = createCard();
-            addCardTitle(card, managed.label + "  ·  " + managed.login);
-            String expiry = managed.forever() ? "бессрочно" : "до " + managed.expires;
-            String daily = managed.dailyMb <= 0 ? "∞" : managed.dailyMb + " МБ/день";
-            String monthly = managed.monthlyMb <= 0 ? "∞" : managed.monthlyMb + " МБ/месяц";
-            String speed = managed.speedMbps <= 0 ? "без ограничения"
-                    : managed.speedMbps + " Мбит/с";
-            String state = managedUserState(managed);
-            String resets = (managed.dailyMb > 0
-                    ? "день " + limitResetCountdown(
-                    managed.issuedAt, false) : "")
-                    + (managed.dailyMb > 0 && managed.monthlyMb > 0 ? " · " : "")
-                    + (managed.monthlyMb > 0
-                    ? "месяц " + limitResetCountdown(
-                    managed.issuedAt, true) : "");
-            addCardSubtitle(card, state + " · " + expiry
-                    + "\nСегодня: " + formatBytes(managed.dayBytes)
-                    + (managed.dailyMb > 0 ? " / " + managed.dailyMb + " МБ" : "")
-                    + " · месяц: " + formatBytes(managed.monthBytes)
-                    + (managed.monthlyMb > 0 ? " / " + managed.monthlyMb + " МБ" : "")
-                    + "\nЛимиты: " + daily + " · " + monthly + " · " + speed
-                    + (resets.isEmpty() ? "" : "\nСброс: " + resets));
-            LinearLayout actions = new LinearLayout(this);
-            actions.setOrientation(LinearLayout.VERTICAL);
-            actions.setPadding(0, dp(8), 0, 0);
-            actions.setVisibility(View.GONE);
-            LinearLayout primary = createUserActionRow();
-            addUserAction(primary, "СТАТУС И ТРАФИК", false,
-                    () -> showManagedUserStatus(managed), false);
-            addUserAction(primary, "КОД И QR", false,
-                    () -> showAccessCode(managed), true);
-            actions.addView(primary);
-            LinearLayout secondary = createUserActionRow();
-            secondary.setPadding(0, dp(8), 0, 0);
-            addUserAction(secondary, "ПРОДЛИТЬ", false,
-                    () -> showExtendManagedUser(managed), false);
-            addUserAction(secondary, "ОТОЗВАТЬ", true,
-                    () -> confirmRevokeManagedUser(managed), true);
-            actions.addView(secondary);
-            LinearLayout limits = createUserActionRow();
-            limits.setPadding(0, dp(8), 0, 0);
-            addUserAction(limits, "ИЗМЕНИТЬ ЛИМИТЫ", false,
-                    () -> showEditManagedUserLimits(managed), false);
-            addUserAction(limits, "ОБНУЛИТЬ ТРАФИК", true,
-                    () -> confirmResetManagedUserUsage(managed), true);
-            actions.addView(limits);
-            TextView actionsToggle = new TextView(this);
-            actionsToggle.setText("УПРАВЛЕНИЕ  ▼");
-            actionsToggle.setTextColor(0xFFE8EAF0);
-            actionsToggle.setTextSize(13);
-            actionsToggle.setTypeface(null, android.graphics.Typeface.BOLD);
-            actionsToggle.setGravity(android.view.Gravity.CENTER);
-            actionsToggle.setBackgroundResource(R.drawable.settings_action_background);
-            actionsToggle.setClickable(true);
-            actionsToggle.setFocusable(true);
-            actionsToggle.setOnClickListener(v -> {
-                boolean open = actions.getVisibility() != View.VISIBLE;
-                actions.setVisibility(open ? View.VISIBLE : View.GONE);
-                actionsToggle.setText(open ? "УПРАВЛЕНИЕ  ▲" : "УПРАВЛЕНИЕ  ▼");
-            });
-            LinearLayout.LayoutParams toggleParams = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, dp(48));
-            toggleParams.topMargin = dp(10);
-            card.addView(actionsToggle, toggleParams);
-            card.addView(actions);
-            page.addView(card, pageCardParams());
+            addManagedUserCard(page, managed);
         }
 
         if (published != null || !publicUsers.isEmpty()) {
@@ -485,7 +420,7 @@ public class MainActivity extends Activity {
             page.addView(pubCard, pageCardParams());
 
             if (published != null) {
-                addPageAction(page, "Настройки публичного сервера",
+                addPageAction(page, "Настройки публичного режима",
                         "Изменить лимиты или отключить раздачу",
                         () -> showPublishedServerPage(active, published));
             } else {
@@ -500,19 +435,7 @@ public class MainActivity extends Activity {
                 pubContainer.setVisibility(View.GONE);
 
                 for (ServerAccessManager.ManagedUser pubManaged : publicUsers) {
-                    LinearLayout pCard = createCard();
-                    addCardTitle(pCard, pubManaged.login
-                            + (pubManaged.expired ? " (истёк)" : ""));
-                    String expiry = pubManaged.forever() ? "бессрочно" : "до " + pubManaged.expires;
-                    addCardSubtitle(pCard, "Срок: " + expiry
-                            + "\nСегодня: " + formatBytes(pubManaged.dayBytes)
-                            + " · месяц: " + formatBytes(pubManaged.monthBytes));
-                    Button revoke = new Button(this);
-                    revoke.setText("ОТОЗВАТЬ");
-                    revoke.setTextColor(0xFFFF7272);
-                    revoke.setOnClickListener(v -> confirmRevokeManagedUser(pubManaged));
-                    pCard.addView(revoke);
-                    pubContainer.addView(pCard, pageCardParams());
+                    addManagedUserCard(pubContainer, pubManaged);
                 }
 
                 TextView pubToggle = new TextView(this);
@@ -541,6 +464,77 @@ public class MainActivity extends Activity {
         addPageAction(page, "Обновить список", "Получить актуальные данные с сервера",
                 this::loadManagedUsers);
         showScrollablePage(page, navPeople);
+    }
+
+    private void addManagedUserCard(
+            LinearLayout container, ServerAccessManager.ManagedUser managed) {
+        LinearLayout card = createCard();
+        addCardTitle(card, managed.label + "  ·  " + managed.login
+                + (managed.expired ? " (истёк)" : ""));
+        String expiry = managed.forever() ? "бессрочно" : "до " + managed.expires;
+        String daily = managed.dailyMb <= 0 ? "∞" : managed.dailyMb + " МБ/день";
+        String monthly = managed.monthlyMb <= 0 ? "∞" : managed.monthlyMb + " МБ/месяц";
+        String speed = managed.speedMbps <= 0 ? "без ограничения"
+                : managed.speedMbps + " Мбит/с";
+        String state = managedUserState(managed);
+        String resets = (managed.dailyMb > 0
+                ? "день " + limitResetCountdown(
+                managed.issuedAt, false) : "")
+                + (managed.dailyMb > 0 && managed.monthlyMb > 0 ? " · " : "")
+                + (managed.monthlyMb > 0
+                ? "месяц " + limitResetCountdown(
+                managed.issuedAt, true) : "");
+        addCardSubtitle(card, state + " · " + expiry
+                + "\nСегодня: " + formatBytes(managed.dayBytes)
+                + (managed.dailyMb > 0 ? " / " + managed.dailyMb + " МБ" : "")
+                + " · месяц: " + formatBytes(managed.monthBytes)
+                + (managed.monthlyMb > 0 ? " / " + managed.monthlyMb + " МБ" : "")
+                + "\nЛимиты: " + daily + " · " + monthly + " · " + speed
+                + (resets.isEmpty() ? "" : "\nСброс: " + resets));
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.VERTICAL);
+        actions.setPadding(0, dp(8), 0, 0);
+        actions.setVisibility(View.GONE);
+        LinearLayout primary = createUserActionRow();
+        addUserAction(primary, "СТАТУС И ТРАФИК", false,
+                () -> showManagedUserStatus(managed), false);
+        addUserAction(primary, "КОД И QR", false,
+                () -> showAccessCode(managed), true);
+        actions.addView(primary);
+        LinearLayout secondary = createUserActionRow();
+        secondary.setPadding(0, dp(8), 0, 0);
+        addUserAction(secondary, "ПРОДЛИТЬ", false,
+                () -> showExtendManagedUser(managed), false);
+        addUserAction(secondary, "ОТОЗВАТЬ", true,
+                () -> confirmRevokeManagedUser(managed), true);
+        actions.addView(secondary);
+        LinearLayout limits = createUserActionRow();
+        limits.setPadding(0, dp(8), 0, 0);
+        addUserAction(limits, "ИЗМЕНИТЬ ЛИМИТЫ", false,
+                () -> showEditManagedUserLimits(managed), false);
+        addUserAction(limits, "ОБНУЛИТЬ ТРАФИК", true,
+                () -> confirmResetManagedUserUsage(managed), true);
+        actions.addView(limits);
+        TextView actionsToggle = new TextView(this);
+        actionsToggle.setText("УПРАВЛЕНИЕ  ▼");
+        actionsToggle.setTextColor(0xFFE8EAF0);
+        actionsToggle.setTextSize(13);
+        actionsToggle.setTypeface(null, android.graphics.Typeface.BOLD);
+        actionsToggle.setGravity(android.view.Gravity.CENTER);
+        actionsToggle.setBackgroundResource(R.drawable.settings_action_background);
+        actionsToggle.setClickable(true);
+        actionsToggle.setFocusable(true);
+        actionsToggle.setOnClickListener(v -> {
+            boolean open = actions.getVisibility() != View.VISIBLE;
+            actions.setVisibility(open ? View.VISIBLE : View.GONE);
+            actionsToggle.setText(open ? "УПРАВЛЕНИЕ  ▲" : "УПРАВЛЕНИЕ  ▼");
+        });
+        LinearLayout.LayoutParams toggleParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(48));
+        toggleParams.topMargin = dp(10);
+        card.addView(actionsToggle, toggleParams);
+        card.addView(actions);
+        container.addView(card, pageCardParams());
     }
 
     private LinearLayout createUserActionRow() {

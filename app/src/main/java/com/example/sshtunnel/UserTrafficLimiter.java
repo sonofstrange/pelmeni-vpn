@@ -41,6 +41,9 @@ final class UserTrafficLimiter {
     }
 
     int acquire(int requested) throws InterruptedException {
+        if (dailyLimitBytes <= 0 && monthlyLimitBytes <= 0 && bytesPerSecond <= 0) {
+            return requested;
+        }
         long waitNanos = 0;
         long allowed;
         synchronized (this) {

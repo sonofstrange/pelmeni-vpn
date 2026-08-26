@@ -93,10 +93,7 @@ public class TunnelService extends Service {
             return START_NOT_STICKY;
         }
         if (intent != null && RECONFIGURE.equals(intent.getAction()) && wanted) {
-            forceReconnect = true;
-            send("Переключаемся на "
-                    + TunnelMode.label(new SecureStore(this)) + "…");
-            disconnect();
+            reconfigureLiveModes();
             return START_STICKY;
         }
 
@@ -480,6 +477,56 @@ public class TunnelService extends Service {
         failoverVisited.clear();
     }
 
+    private synchronized void reconfigureLiveModes() {
+        SecureStore store = new SecureStore(this);
+        boolean telegramEnabled = store.getBoolean("telegram_proxy", true);
+        boolean vpnEnabled = store.getBoolean("vpn_mode", false);
+        int telegramPort = TunnelMode.telegramSocksPort(store);
+        int vpnPort = TunnelMode.vpnSocksPort(store);
+        int windowSize = NetworkTuning.windowKiB(store) * 1024;
+        int packetSize = NetworkTuning.packetKiB(store) * 1024;
+
+        if (session != null && session.isConnected()) {
+            if (!telegramEnabled && telegramSocksProxy != null) {
+                collectAndClose(telegramSocksProxy);
+                telegramSocksProxy = null;
+            } else if (telegramEnabled && telegramSocksProxy == null) {
+                try {
+                    telegramSocksProxy = new SocksProxy(
+                            session, telegramPort, windowSize, packetSize,
+                            trafficLimiter);
+                    telegramSocksProxy.start();
+                } catch (Exception e) {
+                    android.util.Log.e("PelmeniTunnel", "Failed to start live telegram proxy", e);
+                }
+            }
+
+            if (!vpnEnabled && vpnSocksProxy != null) {
+                collectAndClose(vpnSocksProxy);
+                vpnSocksProxy = null;
+                if (vpnSession != null) {
+                    vpnSession.disconnect();
+                    vpnSession = null;
+                }
+            } else if (vpnEnabled && vpnSocksProxy == null) {
+                Session activeVpnSession = vpnSession != null && vpnSession.isConnected()
+                        ? vpnSession : session;
+                try {
+                    vpnSocksProxy = new SocksProxy(
+                            activeVpnSession, vpnPort, windowSize, packetSize,
+                            trafficLimiter);
+                    vpnSocksProxy.start();
+                } catch (Exception e) {
+                    android.util.Log.e("PelmeniTunnel", "Failed to start live vpn proxy", e);
+                }
+            }
+            send("Подключено · " + TunnelMode.portsLabel(store));
+            return;
+        }
+
+        requestReconnect("Переключаемся на " + TunnelMode.label(store) + "…");
+    }
+
     private Session connectSession(
             SecureStore store, String host, String user, String password,
             int sshPort, boolean tlsProtected, int windowSize,
@@ -494,9 +541,15 @@ public class TunnelService extends Service {
                         underlyingNetwork, windowSize));
         result.setConfig("PreferredAuthentications", "password,keyboard-interactive");
         result.setConfig("cipher.c2s",
-                "aes128-gcm@openssh.com,aes128-ctr,aes256-gcm@openssh.com,aes256-ctr");
+                "chacha20-poly1305@openssh.com,aes128-gcm@openssh.com,aes256-gcm@openssh.com,aes128-ctr,aes256-ctr");
         result.setConfig("cipher.s2c",
-                "aes128-gcm@openssh.com,aes128-ctr,aes256-gcm@openssh.com,aes256-ctr");
+                "chacha20-poly1305@openssh.com,aes128-gcm@openssh.com,aes256-gcm@openssh.com,aes128-ctr,aes256-ctr");
+        result.setConfig("mac.c2s",
+                "hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha2-256,hmac-sha2-512");
+        result.setConfig("mac.s2c",
+                "hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha2-256,hmac-sha2-512");
+        result.setConfig("kex",
+                "curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,diffie-hellman-group-exchange-sha256,diffie-hellman-group14-sha256");
         result.setConfig("max_input_buffer_size", Integer.toString(windowSize));
         result.setServerAliveInterval(15_000);
         result.setServerAliveCountMax(3);

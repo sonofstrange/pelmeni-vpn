@@ -57,6 +57,7 @@ final class SocksProxy implements AutoCloseable {
     synchronized void start() throws IOException {
         server = new ServerSocket();
         server.setReuseAddress(true);
+        server.setReceiveBufferSize(512 * 1024);
         server.bind(new InetSocketAddress("127.0.0.1", port));
         running = true;
         acceptThread = new Thread(() -> {
@@ -93,6 +94,8 @@ final class SocksProxy implements AutoCloseable {
         ChannelDirectTCPIP channel = null;
         try (Socket clientSocket = client) {
             client.setTcpNoDelay(true);
+            client.setReceiveBufferSize(512 * 1024);
+            client.setSendBufferSize(512 * 1024);
             client.setSoTimeout(15_000);
             InputStream input = client.getInputStream();
             OutputStream output = client.getOutputStream();
@@ -166,10 +169,13 @@ final class SocksProxy implements AutoCloseable {
                         ? count : trafficLimiter.acquire(count);
                 if (allowed <= 0) return;
                 output.write(buffer, 0, allowed);
-                output.flush();
+                if (input.available() <= 0) {
+                    output.flush();
+                }
                 counter.addAndGet(allowed);
                 if (allowed < count) return;
             }
+            output.flush();
         } catch (InterruptedException ignored) {
             Thread.currentThread().interrupt();
         } catch (IOException ignored) {

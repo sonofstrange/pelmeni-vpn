@@ -42,6 +42,7 @@ final class TunnelSpeedTest {
         HttpsURLConnection connection = open(
                 "https://speed.cloudflare.com/__down?bytes=0&r=" + System.nanoTime(),
                 socksPort);
+        connection.setRequestProperty("Connection", "close");
         long started = System.nanoTime();
         try (InputStream input = connection.getInputStream()) {
             input.read();
@@ -57,7 +58,7 @@ final class TunnelSpeedTest {
                 "https://speed.cloudflare.com/__down?bytes=" + requestedBytes
                         + "&r=" + System.nanoTime(),
                 socksPort);
-        byte[] buffer = new byte[64 * 1024];
+        byte[] buffer = new byte[128 * 1024];
         long received = 0;
         long started = System.nanoTime();
         try (InputStream input = connection.getInputStream()) {
@@ -77,7 +78,7 @@ final class TunnelSpeedTest {
         connection.setDoOutput(true);
         connection.setFixedLengthStreamingMode(bytes);
         connection.setRequestProperty("Content-Type", "application/octet-stream");
-        byte[] buffer = new byte[64 * 1024];
+        byte[] buffer = new byte[128 * 1024];
         new SecureRandom().nextBytes(buffer);
         int remaining = bytes;
         long started;

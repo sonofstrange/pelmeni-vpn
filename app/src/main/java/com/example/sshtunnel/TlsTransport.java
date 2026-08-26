@@ -354,6 +354,8 @@ final class TlsTransport {
                 SSLSocket tls = (SSLSocket) context.getSocketFactory()
                         .createSocket(raw, host, tlsPort, true);
                 tls.setUseClientMode(true);
+                tls.setTcpNoDelay(true);
+                tls.setKeepAlive(true);
                 tls.setReceiveBufferSize(socketBufferBytes);
                 tls.setSendBufferSize(socketBufferBytes);
                 List<String> protocols = new ArrayList<>();

@@ -164,14 +164,11 @@ final class SocksProxy implements AutoCloseable {
     private void copy(InputStream input, OutputStream output, AtomicLong counter) {
         try {
             byte[] buffer = new byte[NetworkTuning.STREAM_BUFFER_BYTES];
-            for (int count; (count = readAvailable(input, buffer)) != -1;) {
+            for (int count; (count = input.read(buffer)) != -1;) {
                 int allowed = trafficLimiter == null
                         ? count : trafficLimiter.acquire(count);
                 if (allowed <= 0) return;
                 output.write(buffer, 0, allowed);
-                if (input.available() <= 0) {
-                    output.flush();
-                }
                 counter.addAndGet(allowed);
                 if (allowed < count) return;
             }
@@ -182,23 +179,8 @@ final class SocksProxy implements AutoCloseable {
         }
     }
 
-    /**
-     * Blocks for the first bytes, then coalesces everything already queued. This keeps
-     * interactive requests responsive while avoiding a flush for every small TCP read
-     * during sustained transfers.
-     */
     static int readAvailable(InputStream input, byte[] buffer) throws IOException {
-        int total = input.read(buffer);
-        if (total < 0) return -1;
-        while (total < buffer.length) {
-            int queued = input.available();
-            if (queued <= 0) break;
-            int count = input.read(buffer, total,
-                    Math.min(queued, buffer.length - total));
-            if (count <= 0) break;
-            total += count;
-        }
-        return total;
+        return input.read(buffer);
     }
 
     long getUploadedBytes() {

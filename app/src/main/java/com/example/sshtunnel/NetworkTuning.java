@@ -2,7 +2,7 @@ package com.example.sshtunnel;
 
 final class NetworkTuning {
     static final int LEGACY_WINDOW_KIB = 1024;
-    static final int DEFAULT_WINDOW_KIB = 8192;
+    static final int DEFAULT_WINDOW_KIB = 16384;
     static final int DEFAULT_PACKET_KIB = 32;
     static final int DEFAULT_MTU = 8500;
     static final int HIGH_LATENCY_WINDOW_KIB = 16384;

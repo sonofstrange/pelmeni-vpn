@@ -220,7 +220,7 @@ public class VpnTunnelService extends VpnService {
             }
 
             File config = new File(getCacheDir(), "vpn-tun2socks.yml");
-            String text = "misc:\n  task-stack-size: 86016\n  tcp-buffer-size: 524288\n  udp-recv-buffer-size: 524288\n"
+            String text = "misc:\n  task-stack-size: 86016\n"
                     + "tunnel:\n  mtu: " + mtu + "\n  icmp: 'reply'\n"
                     + "socks5:\n  address: '127.0.0.1'\n  port: " + socksPort + "\n  pipeline: true\n"
                     + "mapdns:\n  address: 198.18.0.2\n  port: 53\n"

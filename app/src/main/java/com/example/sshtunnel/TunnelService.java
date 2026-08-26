@@ -545,7 +545,7 @@ public class TunnelService extends Service {
         result.setConfig("cipher.c2s",
                 "chacha20-poly1305@openssh.com,aes128-gcm@openssh.com,aes256-gcm@openssh.com,aes128-ctr,aes256-ctr");
         result.setConfig("cipher.s2c",
-                "aes128-gcm@openssh.com,aes128-ctr,chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes256-ctr");
+                "chacha20-poly1305@openssh.com,aes128-gcm@openssh.com,aes256-gcm@openssh.com,aes128-ctr,aes256-ctr");
         result.setConfig("mac.c2s",
                 "hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha2-256,hmac-sha2-512");
         result.setConfig("mac.s2c",

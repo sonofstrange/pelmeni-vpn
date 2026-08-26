@@ -337,6 +337,7 @@ final class TlsTransport {
             try {
                 raw.setTcpNoDelay(true);
                 raw.setKeepAlive(true);
+                raw.setPerformancePreferences(0, 1, 2);
                 raw.setReceiveBufferSize(socketBufferBytes);
                 raw.setSendBufferSize(socketBufferBytes);
                 java.net.InetAddress ip;

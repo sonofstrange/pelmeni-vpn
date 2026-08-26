@@ -11,7 +11,7 @@ public final class ChannelTuning {
         channel.setLocalWindowSize(windowSize);
         channel.setLocalPacketSize(packetSize);
         
-        int pipeBufferSize = Math.max(512 * 1024, Math.min(windowSize, 4 * 1024 * 1024));
+        int pipeBufferSize = 128 * 1024;
         Channel.MyPipedInputStream in = new Channel.MyPipedInputStream(pipeBufferSize, 1000);
         channel.io.setInputStream(in);
         return in;

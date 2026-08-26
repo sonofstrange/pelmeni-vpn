@@ -1,20 +1,12 @@
 package com.jcraft.jsch;
 
-import java.io.IOException;
-import java.io.InputStream;
-
-/** Keeps direct-tcpip channels from stalling on JSch's small receive window and 32KB pipe. */
+/** Keeps direct-tcpip channels from stalling on JSch's small 128 KiB receive window. */
 public final class ChannelTuning {
-    public static InputStream optimizeDirectTcpIp(
-            ChannelDirectTCPIP channel, int windowSize, int packetSize) throws IOException {
+    public static void optimizeDirectTcpIp(
+            ChannelDirectTCPIP channel, int windowSize, int packetSize) {
         channel.setLocalWindowSizeMax(windowSize);
         channel.setLocalWindowSize(windowSize);
         channel.setLocalPacketSize(packetSize);
-        
-        int pipeBufferSize = 128 * 1024;
-        Channel.MyPipedInputStream in = new Channel.MyPipedInputStream(pipeBufferSize, 0);
-        channel.io.setInputStream(in);
-        return in;
     }
 
     private ChannelTuning() {

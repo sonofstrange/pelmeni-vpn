@@ -129,8 +129,9 @@ final class SocksProxy implements AutoCloseable {
             channel.setPort(targetPort);
             channel.setOrgIPAddress("127.0.0.1");
             channel.setOrgPort(client.getLocalPort());
-            InputStream channelInput = ChannelTuning.optimizeDirectTcpIp(channel, windowSize, packetSize);
+            ChannelTuning.optimizeDirectTcpIp(channel, windowSize, packetSize);
             OutputStream channelOutput = channel.getOutputStream();
+            InputStream channelInput = channel.getInputStream();
             long connectStarted = SystemClock.elapsedRealtime();
             channel.connect(15_000);
             lastLatencyMs = (int) Math.min(
@@ -168,9 +169,7 @@ final class SocksProxy implements AutoCloseable {
                         ? count : trafficLimiter.acquire(count);
                 if (allowed <= 0) return;
                 output.write(buffer, 0, allowed);
-                if (input.available() <= 0) {
-                    output.flush();
-                }
+                output.flush();
                 counter.addAndGet(allowed);
                 if (allowed < count) return;
             }

@@ -64,6 +64,7 @@ public class TunnelService extends Service {
     private volatile long serviceStartedAt;
     private volatile long connectedAt;
     private volatile String lastError = "нет";
+    private volatile boolean fastRetry;
     private static volatile boolean serviceActive;
     private static volatile boolean connected;
 
@@ -185,6 +186,7 @@ public class TunnelService extends Service {
 
     private void commitUnderlyingNetwork(Network network, long generation) {
         boolean handoff;
+        boolean wasDisconnected;
         synchronized (this) {
             if (!wanted || generation != networkSwitchGeneration
                     || !network.equals(pendingUnderlyingNetwork)) {
@@ -192,22 +194,17 @@ public class TunnelService extends Service {
             }
             Network previous = activeUnderlyingNetwork;
             handoff = previous != null && !network.equals(previous);
+            wasDisconnected = !connected;
             activeUnderlyingNetwork = network;
             pendingUnderlyingNetwork = null;
             pendingNetworkSwitch = null;
-            notifyAll();
+            wakeConnectionLoop();
         }
-        // Initial network discovery wakes connectOnce(), which is waiting for
-        // this exact network. Reconnecting here used to cancel the first SSH
-        // attempt and made startup succeed only on the retry.
-        boolean reconnecting = UnderlyingNetworkPolicy.reconnectAfterCommit(handoff)
-                && requestReconnect(
-                "Сеть стабилизировалась, обновляем VPN-соединение…");
-        if (reconnecting) {
-            restartVpnTransport(network);
-        } else {
-            updateVpnUnderlyingNetwork(network);
+        if (handoff || wasDisconnected) {
+            requestReconnect(
+                    "Сеть стабилизировалась, обновляем VPN-соединение…");
         }
+        updateVpnUnderlyingNetwork(network);
     }
 
     private void discardUnderlyingNetwork(Network network) {
@@ -228,13 +225,8 @@ public class TunnelService extends Service {
             }
         }
         if (activeLost) {
-            boolean reconnecting =
-                    requestReconnect("Сеть потеряна, ожидаем новый маршрут…");
-            if (reconnecting) {
-                restartVpnTransport(null);
-            } else {
-                updateVpnUnderlyingNetwork(null);
-            }
+            requestReconnect("Сеть потеряна, ожидаем новый маршрут…");
+            updateVpnUnderlyingNetwork(null);
         }
     }
 
@@ -250,14 +242,20 @@ public class TunnelService extends Service {
         }
     }
 
+    private synchronized void wakeConnectionLoop() {
+        fastRetry = true;
+        notifyAll();
+    }
+
     private synchronized boolean requestReconnect(String message) {
         if (!wanted) return false;
         if (!new SecureStore(this).getBoolean("auto_reconnect", true)) return false;
-        if (forceReconnect) return false;
         forceReconnect = true;
         connected = false;
+        fastRetry = true;
         send(message);
         disconnect();
+        notifyAll();
         startConnectionLoop();
         return true;
     }
@@ -325,7 +323,12 @@ public class TunnelService extends Service {
 
                     if (!wanted) break;
                     sleepInterruptibly(delaySeconds * 1000L);
-                    delaySeconds = Math.min(delaySeconds * 2, 30);
+                    if (fastRetry) {
+                        delaySeconds = 2;
+                        fastRetry = false;
+                    } else {
+                        delaySeconds = Math.min(delaySeconds * 2, 30);
+                    }
                 }
             } finally {
                 loopRunning.set(false);
@@ -360,20 +363,27 @@ public class TunnelService extends Service {
 
         send("Подключение к " + host
                 + (tlsProtected ? " через защищённый TLS…" : "…"));
-        Session newSession = connectSession(
-                store, host, user, password, sshPort, tlsProtected,
-                windowSize, underlyingNetwork);
+        Session newSession = null;
         Session newVpnSession = null;
         SocksProxy newTelegramProxy = null;
         SocksProxy newVpnProxy = null;
         UserTrafficLimiter newTrafficLimiter = null;
+        java.util.concurrent.FutureTask<Session> vpnTask = null;
+
+        if (telegramEnabled && vpnEnabled) {
+            vpnTask = new java.util.concurrent.FutureTask<>(() -> connectSession(
+                    store, host, user, password, sshPort, tlsProtected,
+                    windowSize, underlyingNetwork));
+            new Thread(vpnTask, "pelmeni-vpn-ssh-connect").start();
+        }
+
         try {
-            if (telegramEnabled && vpnEnabled) {
-                newVpnSession = connectSession(
-                        store, host, user, password, sshPort, tlsProtected,
-                        windowSize, underlyingNetwork);
+            newSession = connectSession(
+                    store, host, user, password, sshPort, tlsProtected,
+                    windowSize, underlyingNetwork);
+            if (vpnTask != null) {
+                newVpnSession = vpnTask.get(25_000, TimeUnit.MILLISECONDS);
             }
-            syncUserPolicy(newSession);
             newTrafficLimiter = createTrafficLimiter(store);
             if (telegramEnabled) {
                 newTelegramProxy = new SocksProxy(
@@ -398,10 +408,14 @@ public class TunnelService extends Service {
             connectedAt = SystemClock.elapsedRealtime();
             lastError = "нет";
             resetFailoverState();
+
+            final Session policySession = newSession;
+            statsWorker.execute(() -> syncUserPolicy(policySession));
         } catch (Exception error) {
+            if (vpnTask != null) vpnTask.cancel(true);
             if (newTelegramProxy != null) newTelegramProxy.close();
             if (newVpnProxy != null) newVpnProxy.close();
-            newSession.disconnect();
+            if (newSession != null) newSession.disconnect();
             if (newVpnSession != null) newVpnSession.disconnect();
             throw error;
         }
@@ -722,12 +736,15 @@ public class TunnelService extends Service {
 
     private void sleepInterruptibly(long millis) {
         long end = SystemClock.elapsedRealtime() + millis;
-        while (wanted && SystemClock.elapsedRealtime() < end) {
-            try {
-                Thread.sleep(Math.min(500, end - SystemClock.elapsedRealtime()));
-            } catch (InterruptedException ignored) {
-                Thread.currentThread().interrupt();
-                return;
+        synchronized (this) {
+            while (wanted && !fastRetry && SystemClock.elapsedRealtime() < end) {
+                long remaining = end - SystemClock.elapsedRealtime();
+                try {
+                    wait(Math.min(500, remaining));
+                } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
             }
         }
     }

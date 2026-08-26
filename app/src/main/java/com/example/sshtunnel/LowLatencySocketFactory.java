@@ -13,6 +13,8 @@ import java.net.SocketException;
 
 /** Creates a low-latency SSH socket with enough TCP buffering for high-RTT links. */
 final class LowLatencySocketFactory implements SocketFactory {
+    private static final java.util.Map<String, java.net.InetAddress> DNS_CACHE =
+            new java.util.concurrent.ConcurrentHashMap<>();
     private final Network network;
     private final int socketBufferBytes;
 
@@ -29,9 +31,16 @@ final class LowLatencySocketFactory implements SocketFactory {
         Socket socket = network == null
                 ? new Socket() : network.getSocketFactory().createSocket();
         configure(socket);
-        InetSocketAddress address = network == null
-                ? new InetSocketAddress(host, port)
-                : new InetSocketAddress(network.getByName(host), port);
+        java.net.InetAddress ip;
+        try {
+            ip = network == null
+                    ? java.net.InetAddress.getByName(host) : network.getByName(host);
+            DNS_CACHE.put(host, ip);
+        } catch (IOException dnsError) {
+            ip = DNS_CACHE.get(host);
+            if (ip == null) throw dnsError;
+        }
+        InetSocketAddress address = new InetSocketAddress(ip, port);
         socket.connect(address, 15_000);
         configure(socket);
         return socket;

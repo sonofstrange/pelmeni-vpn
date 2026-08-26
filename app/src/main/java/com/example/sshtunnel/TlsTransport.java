@@ -294,6 +294,8 @@ final class TlsTransport {
     }
 
     private static final class TlsSocketFactory implements SocketFactory {
+        private static final java.util.Map<String, java.net.InetAddress> DNS_CACHE =
+                new java.util.concurrent.ConcurrentHashMap<>();
         private final SecureStore store;
         private final Network network;
         private final SSLContext context;
@@ -337,10 +339,16 @@ final class TlsTransport {
                 raw.setKeepAlive(true);
                 raw.setReceiveBufferSize(socketBufferBytes);
                 raw.setSendBufferSize(socketBufferBytes);
-                raw.setSoTimeout(15_000);
-                InetSocketAddress address = network == null
-                        ? new InetSocketAddress(host, tlsPort)
-                        : new InetSocketAddress(network.getByName(host), tlsPort);
+                java.net.InetAddress ip;
+                try {
+                    ip = network == null
+                            ? java.net.InetAddress.getByName(host) : network.getByName(host);
+                    DNS_CACHE.put(host, ip);
+                } catch (IOException dnsError) {
+                    ip = DNS_CACHE.get(host);
+                    if (ip == null) throw dnsError;
+                }
+                InetSocketAddress address = new InetSocketAddress(ip, tlsPort);
                 raw.connect(address, tlsPorts.length > 1 ? 4_000 : 15_000);
 
                 SSLSocket tls = (SSLSocket) context.getSocketFactory()

@@ -1,9 +1,10 @@
 plugins { id 'com.android.application' }
 
-def releaseKeystorePath = System.getenv('PELMENI_RELEASE_KEYSTORE')
-def releaseStorePassword = System.getenv('PELMENI_RELEASE_STORE_PASSWORD')
-def releaseKeyAlias = System.getenv('PELMENI_RELEASE_KEY_ALIAS')
-def releaseKeyPassword = System.getenv('PELMENI_RELEASE_KEY_PASSWORD')
+def defaultKeystore = new File(System.getProperty('user.home'), '.android/debug.keystore')
+def releaseKeystorePath = System.getenv('PELMENI_RELEASE_KEYSTORE') ?: (defaultKeystore.exists() ? defaultKeystore.absolutePath : null)
+def releaseStorePassword = System.getenv('PELMENI_RELEASE_STORE_PASSWORD') ?: 'android'
+def releaseKeyAlias = System.getenv('PELMENI_RELEASE_KEY_ALIAS') ?: 'androiddebugkey'
+def releaseKeyPassword = System.getenv('PELMENI_RELEASE_KEY_PASSWORD') ?: 'android'
 def releaseSigningReady = [
         releaseKeystorePath,
         releaseStorePassword,
@@ -19,8 +20,8 @@ android {
         applicationId 'com.example.sshtunnel.devcontrol'
         minSdk 26
         targetSdk 35
-        versionCode 5
-        versionName '1.35'
+        versionCode 6
+        versionName '1.36-beta.1'
     }
 
     signingConfigs {

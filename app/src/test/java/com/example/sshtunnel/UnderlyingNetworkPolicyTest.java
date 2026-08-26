@@ -10,8 +10,8 @@ public class UnderlyingNetworkPolicyTest {
         assertTrue(UnderlyingNetworkPolicy.usable(true, true, true, true));
     }
 
-    @Test public void rejectsNetworkBeforeAndroidValidation() {
-        assertFalse(UnderlyingNetworkPolicy.usable(true, false, true, true));
+    @Test public void acceptsUnvalidatedPhysicalInternet() {
+        assertTrue(UnderlyingNetworkPolicy.usable(true, false, true, true));
     }
 
     @Test public void rejectsVpnAndSuspendedNetworks() {

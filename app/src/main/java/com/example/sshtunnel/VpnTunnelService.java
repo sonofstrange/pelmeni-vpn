@@ -156,6 +156,9 @@ public class VpnTunnelService extends VpnService {
 
     private synchronized void restartTransport(RoutingSnapshot snapshot) {
         if (starting || stopping) return;
+        if (tun != null) {
+            return;
+        }
         starting = true;
         startAsForeground("VPN: обновляем транспорт после смены сети…");
         worker.execute(() -> {

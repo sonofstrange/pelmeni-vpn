@@ -6,7 +6,7 @@ final class UnderlyingNetworkPolicy {
 
     static boolean usable(
             boolean internet, boolean validated, boolean notVpn, boolean notSuspended) {
-        return internet && validated && notVpn && notSuspended;
+        return internet && notVpn && notSuspended;
     }
 
     /**

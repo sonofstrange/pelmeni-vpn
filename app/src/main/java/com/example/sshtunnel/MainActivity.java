@@ -365,15 +365,31 @@ public class MainActivity extends Activity {
             showScrollablePage(page, navPeople);
             return;
         }
-        addSectionTitle(page, "Пользователи · " + users.size());
-        if (users.isEmpty()) {
+        List<ServerAccessManager.ManagedUser> personalUsers = new ArrayList<>();
+        List<ServerAccessManager.ManagedUser> publicUsers = new ArrayList<>();
+        for (ServerAccessManager.ManagedUser managed : users) {
+            if (managed.isPublic()) {
+                publicUsers.add(managed);
+            } else {
+                personalUsers.add(managed);
+            }
+        }
+
+        PublicServerRegistry.Entry published =
+                PublicServerManager.saved(store, active.id);
+
+        addSectionTitle(page, publicUsers.isEmpty()
+                ? "Пользователи · " + personalUsers.size()
+                : "Личные пользователи · " + personalUsers.size());
+        if (personalUsers.isEmpty()) {
             LinearLayout empty = createCard();
-            addCardTitle(empty, "Пока никого нет");
-            addCardSubtitle(empty,
-                    "Добавь человека и отправь ему секретный код. Админский пароль в код не попадёт.");
+            addCardTitle(empty, "Пока нет личных пользователей");
+            addCardSubtitle(empty, publicUsers.isEmpty()
+                    ? "Добавь человека и отправь ему секретный код. Админский пароль в код не попадёт."
+                    : "Личные пользователи не добавлены. Все подключения ниже созданы через публичный режим.");
             page.addView(empty, pageCardParams());
         }
-        for (ServerAccessManager.ManagedUser managed : users) {
+        for (ServerAccessManager.ManagedUser managed : personalUsers) {
             LinearLayout card = createCard();
             addCardTitle(card, managed.label + "  ·  " + managed.login);
             String expiry = managed.forever() ? "бессрочно" : "до " + managed.expires;
@@ -440,6 +456,87 @@ public class MainActivity extends Activity {
             card.addView(actionsToggle, toggleParams);
             card.addView(actions);
             page.addView(card, pageCardParams());
+        }
+
+        if (published != null || !publicUsers.isEmpty()) {
+            addSectionTitle(page, "Публичный сервер");
+            LinearLayout pubCard = createCard();
+            addCardTitle(pubCard, published != null
+                    ? "Публичный режим: «" + published.name + "»"
+                    : "Публичные подключения");
+            int expiredCount = 0;
+            long pubDay = 0;
+            long pubMonth = 0;
+            for (ServerAccessManager.ManagedUser p : publicUsers) {
+                if (p.expired) expiredCount++;
+                pubDay += p.dayBytes;
+                pubMonth += p.monthBytes;
+            }
+            int activePub = publicUsers.size() - expiredCount;
+            String pubInfo = (published != null
+                    ? "Лимит мест: " + activePub + " из " + published.maxUsers + "\n"
+                    : "")
+                    + "Всего подключений: " + publicUsers.size()
+                    + " · активных: " + activePub
+                    + " · истёкших: " + expiredCount
+                    + "\nТрафик сегодня: " + formatBytes(pubDay)
+                    + " · за месяц: " + formatBytes(pubMonth);
+            addCardSubtitle(pubCard, pubInfo);
+            page.addView(pubCard, pageCardParams());
+
+            if (published != null) {
+                addPageAction(page, "Настройки публичного сервера",
+                        "Изменить лимиты или отключить раздачу",
+                        () -> showPublishedServerPage(active, published));
+            } else {
+                addPageAction(page, "Сделать сервер публичным",
+                        "Открыть раздачу для каталога бесплатных серверов",
+                        () -> showPublishServerPage(active));
+            }
+
+            if (!publicUsers.isEmpty()) {
+                LinearLayout pubContainer = new LinearLayout(this);
+                pubContainer.setOrientation(LinearLayout.VERTICAL);
+                pubContainer.setVisibility(View.GONE);
+
+                for (ServerAccessManager.ManagedUser pubManaged : publicUsers) {
+                    LinearLayout pCard = createCard();
+                    addCardTitle(pCard, pubManaged.login
+                            + (pubManaged.expired ? " (истёк)" : ""));
+                    String expiry = pubManaged.forever() ? "бессрочно" : "до " + pubManaged.expires;
+                    addCardSubtitle(pCard, "Срок: " + expiry
+                            + "\nСегодня: " + formatBytes(pubManaged.dayBytes)
+                            + " · месяц: " + formatBytes(pubManaged.monthBytes));
+                    Button revoke = new Button(this);
+                    revoke.setText("ОТОЗВАТЬ");
+                    revoke.setTextColor(0xFFFF7272);
+                    revoke.setOnClickListener(v -> confirmRevokeManagedUser(pubManaged));
+                    pCard.addView(revoke);
+                    pubContainer.addView(pCard, pageCardParams());
+                }
+
+                TextView pubToggle = new TextView(this);
+                pubToggle.setText("ПУБЛИЧНЫЕ ПОДКЛЮЧЕНИЯ (" + publicUsers.size() + ")  ▼");
+                pubToggle.setTextColor(0xFFE8EAF0);
+                pubToggle.setTextSize(13);
+                pubToggle.setTypeface(null, android.graphics.Typeface.BOLD);
+                pubToggle.setGravity(android.view.Gravity.CENTER);
+                pubToggle.setBackgroundResource(R.drawable.settings_action_background);
+                pubToggle.setClickable(true);
+                pubToggle.setFocusable(true);
+                pubToggle.setOnClickListener(v -> {
+                    boolean open = pubContainer.getVisibility() != View.VISIBLE;
+                    pubContainer.setVisibility(open ? View.VISIBLE : View.GONE);
+                    pubToggle.setText(open
+                            ? "ПУБЛИЧНЫЕ ПОДКЛЮЧЕНИЯ (" + publicUsers.size() + ")  ▲"
+                            : "ПУБЛИЧНЫЕ ПОДКЛЮЧЕНИЯ (" + publicUsers.size() + ")  ▼");
+                });
+                LinearLayout.LayoutParams toggleParams = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, dp(48));
+                toggleParams.topMargin = dp(10);
+                page.addView(pubToggle, toggleParams);
+                page.addView(pubContainer);
+            }
         }
         addPageAction(page, "Обновить список", "Получить актуальные данные с сервера",
                 this::loadManagedUsers);
@@ -2994,27 +3091,25 @@ public class MainActivity extends Activity {
                         else Toast.makeText(this, "Сначала выбери этот сервер",
                                 Toast.LENGTH_SHORT).show();
                     });
-            if (Branding.isDeveloperMode(this)) {
-                PublicServerRegistry.Entry published =
-                        PublicServerManager.saved(store, profile.id);
-                addPageAction(page,
-                        published == null
-                                ? "Сделать сервер публичным"
-                                : "Публичный режим настроен",
-                        published == null
-                                ? "Создать безопасную выдачу отдельных "
-                                + "аккаунтов и лимитов для бесплатного каталога"
-                                : "Снова открыть страницу публикации «"
-                                + published.name + "»",
-                        () -> {
-                            if (published == null) {
-                                showPublishServerPage(profile);
-                            } else {
-                                showPublishedServerPage(
-                                        profile, published);
-                            }
-                        });
-            }
+            PublicServerRegistry.Entry published =
+                    PublicServerManager.saved(store, profile.id);
+            addPageAction(page,
+                    published == null
+                            ? "Сделать сервер публичным"
+                            : "Публичный режим настроен",
+                    published == null
+                            ? "Создать безопасную выдачу отдельных "
+                            + "аккаунтов и лимитов для бесплатного каталога"
+                            : "Снова открыть страницу публикации «"
+                            + published.name + "»",
+                    () -> {
+                        if (published == null) {
+                            showPublishServerPage(profile);
+                        } else {
+                            showPublishedServerPage(
+                                    profile, published);
+                        }
+                    });
         }
 
         Button saveProfile = new Button(this);

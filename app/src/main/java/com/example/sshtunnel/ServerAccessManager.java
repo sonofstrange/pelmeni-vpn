@@ -60,6 +60,7 @@ final class ServerAccessManager {
         final long statusUpdatedAt;
         final long serverOffsetMinutes;
         final long issuedAt;
+        final String publicPool;
 
         ManagedUser(String label, String login, String password, String expires,
                     long dailyMb, long monthlyMb, long speedMbps, String accessCode,
@@ -67,6 +68,19 @@ final class ServerAccessManager {
                     boolean expired, boolean policyHealthy,
                     String policyError, long statusUpdatedAt,
                     long serverOffsetMinutes, long issuedAt) {
+            this(label, login, password, expires, dailyMb, monthlyMb, speedMbps,
+                    accessCode, dayBytes, monthBytes, blocked, expired,
+                    policyHealthy, policyError, statusUpdatedAt,
+                    serverOffsetMinutes, issuedAt, "");
+        }
+
+        ManagedUser(String label, String login, String password, String expires,
+                    long dailyMb, long monthlyMb, long speedMbps, String accessCode,
+                    long dayBytes, long monthBytes, boolean blocked,
+                    boolean expired, boolean policyHealthy,
+                    String policyError, long statusUpdatedAt,
+                    long serverOffsetMinutes, long issuedAt,
+                    String publicPool) {
             this.label = label;
             this.login = login;
             this.password = password;
@@ -84,6 +98,11 @@ final class ServerAccessManager {
             this.statusUpdatedAt = statusUpdatedAt;
             this.serverOffsetMinutes = serverOffsetMinutes;
             this.issuedAt = issuedAt;
+            this.publicPool = publicPool == null ? "" : publicPool;
+        }
+
+        boolean isPublic() {
+            return !publicPool.isEmpty() || login.startsWith("pel_pub_");
         }
 
         boolean forever() {
@@ -324,7 +343,8 @@ final class ServerAccessManager {
                     item.optString("policy_error", ""),
                     item.optLong("status_updated_at", 0),
                     item.optLong("server_offset_minutes", 0),
-                    item.optLong("issued_at", 0)));
+                    item.optLong("issued_at", 0),
+                    item.optString("public_pool", "")));
         }
         return users;
     }

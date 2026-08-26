@@ -12,7 +12,7 @@ final class ServerProfiles {
     private static final String PROFILES_KEY = "server_profiles";
     private static final String ACTIVE_KEY = "active_server_profile";
     private static final String PERFORMANCE_MIGRATION_KEY =
-            "performance_defaults_v4";
+            "performance_defaults_v5";
 
     static final class Profile {
         final String id;
@@ -71,11 +71,10 @@ final class ServerProfiles {
         for (int i = 0; i < profiles.size(); i++) {
             Profile profile = profiles.get(i);
             if ((profile.windowKiB == 1024 || profile.windowKiB == 4096 || profile.windowKiB == 16384)
-                    && profile.packetKiB == NetworkTuning.DEFAULT_PACKET_KIB
                     && profile.mtu == NetworkTuning.DEFAULT_MTU) {
                 profiles.set(i, new Profile(profile.id, profile.name, profile.host,
                         profile.sshPort, profile.user, profile.socksPort,
-                        NetworkTuning.DEFAULT_WINDOW_KIB, profile.packetKiB, profile.mtu));
+                        NetworkTuning.DEFAULT_WINDOW_KIB, NetworkTuning.DEFAULT_PACKET_KIB, profile.mtu));
                 changed = true;
                 activeChanged |= profile.id.equals(activeId);
             }
@@ -87,6 +86,8 @@ final class ServerProfiles {
                 || "16384".equals(store.getPlain("ssh_window_kib", ""))) {
             store.putPlain("ssh_window_kib",
                     Integer.toString(NetworkTuning.DEFAULT_WINDOW_KIB));
+            store.putPlain("ssh_packet_kib",
+                    Integer.toString(NetworkTuning.DEFAULT_PACKET_KIB));
         }
         store.putBoolean(PERFORMANCE_MIGRATION_KEY, true);
     }

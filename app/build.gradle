@@ -21,8 +21,8 @@ android {
         applicationId 'com.example.sshtunnel'
         minSdk 26
         targetSdk 35
-        versionCode 79
-        versionName '1.37-beta.7'
+        versionCode 80
+        versionName '1.37-beta.8'
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
     }
 
@@ -73,4 +73,5 @@ dependencies {
     testImplementation 'org.json:json:20240303'
     androidTestImplementation 'androidx.test.ext:junit:1.2.1'
     androidTestImplementation 'androidx.test:runner:1.6.2'
+    androidTestImplementation 'androidx.test.uiautomator:uiautomator:2.3.0'
 }

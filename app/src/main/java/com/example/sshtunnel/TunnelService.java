@@ -7,6 +7,7 @@ import android.os.*;
 
 import com.jcraft.jsch.*;
 
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -32,7 +33,7 @@ public class TunnelService extends Service {
     private volatile boolean wanted = false;
     private volatile boolean forceReconnect = false;
     private volatile Session session;
-    private volatile Session vpnSession;
+    private volatile Session[] vpnSessions;
     private volatile SocksProxy telegramSocksProxy;
     private volatile SocksProxy vpnSocksProxy;
     private volatile UserTrafficLimiter trafficLimiter;
@@ -361,26 +362,27 @@ public class TunnelService extends Service {
         send("Подключение к " + host
                 + (tlsProtected ? " через защищённый TLS…" : "…"));
         Session newSession = null;
-        Session newVpnSession = null;
+        Session[] newVpnSessions = null;
         SocksProxy newTelegramProxy = null;
         SocksProxy newVpnProxy = null;
         UserTrafficLimiter newTrafficLimiter = null;
-        java.util.concurrent.FutureTask<Session> vpnTask = null;
+        int poolCount = vpnEnabled ? 3 : 1;
+        ExecutorService connectPool = Executors.newFixedThreadPool(poolCount);
+        List<Future<Session>> futures = new ArrayList<>();
 
-        if (telegramEnabled && vpnEnabled) {
-            vpnTask = new java.util.concurrent.FutureTask<>(() -> connectSession(
+        for (int i = 0; i < poolCount; i++) {
+            futures.add(connectPool.submit(() -> connectSession(
                     store, host, user, password, sshPort, tlsProtected,
-                    windowSize, underlyingNetwork));
-            new Thread(vpnTask, "pelmeni-vpn-ssh-connect").start();
+                    windowSize, underlyingNetwork)));
         }
+        connectPool.shutdown();
 
+        List<Session> established = new ArrayList<>();
         try {
-            newSession = connectSession(
-                    store, host, user, password, sshPort, tlsProtected,
-                    windowSize, underlyingNetwork);
-            if (vpnTask != null) {
-                newVpnSession = vpnTask.get(25_000, TimeUnit.MILLISECONDS);
+            for (Future<Session> f : futures) {
+                established.add(f.get(25_000, TimeUnit.MILLISECONDS));
             }
+            newSession = established.get(0);
             newTrafficLimiter = createTrafficLimiter(store);
             if (telegramEnabled) {
                 newTelegramProxy = new SocksProxy(
@@ -389,17 +391,15 @@ public class TunnelService extends Service {
                 newTelegramProxy.start();
             }
             if (vpnEnabled) {
-                Session[] vpnPool = newVpnSession != null && newSession != null
-                        ? new Session[]{newVpnSession, newSession}
-                        : new Session[]{newVpnSession == null ? newSession : newVpnSession};
+                newVpnSessions = established.toArray(new Session[0]);
                 newVpnProxy = new SocksProxy(
-                        vpnPool, vpnPort, windowSize, packetSize, newTrafficLimiter);
+                        newVpnSessions, vpnPort, windowSize, packetSize, newTrafficLimiter);
                 newVpnProxy.start();
             }
             if (!wanted || forceReconnect) throw new JSchException("reconnect requested");
 
             session = newSession;
-            vpnSession = newVpnSession;
+            vpnSessions = newVpnSessions;
             telegramSocksProxy = newTelegramProxy;
             vpnSocksProxy = newVpnProxy;
             trafficLimiter = newTrafficLimiter;
@@ -411,11 +411,14 @@ public class TunnelService extends Service {
             final Session policySession = newSession;
             statsWorker.execute(() -> syncUserPolicy(policySession));
         } catch (Exception error) {
-            if (vpnTask != null) vpnTask.cancel(true);
+            for (Future<Session> f : futures) f.cancel(true);
             if (newTelegramProxy != null) newTelegramProxy.close();
             if (newVpnProxy != null) newVpnProxy.close();
-            if (newSession != null) newSession.disconnect();
-            if (newVpnSession != null) newVpnSession.disconnect();
+            for (Session s : established) {
+                if (s != null) {
+                    try { s.disconnect(); } catch (Exception ignored) {}
+                }
+            }
             throw error;
         }
 
@@ -506,14 +509,17 @@ public class TunnelService extends Service {
             if (!vpnEnabled && vpnSocksProxy != null) {
                 collectAndClose(vpnSocksProxy);
                 vpnSocksProxy = null;
-                if (vpnSession != null) {
-                    vpnSession.disconnect();
-                    vpnSession = null;
+                if (vpnSessions != null) {
+                    for (Session s : vpnSessions) {
+                        if (s != null && s != session) {
+                            try { s.disconnect(); } catch (Exception ignored) {}
+                        }
+                    }
+                    vpnSessions = null;
                 }
             } else if (vpnEnabled && vpnSocksProxy == null) {
-                Session[] activePool = vpnSession != null && session != null
-                        ? new Session[]{vpnSession, session}
-                        : new Session[]{vpnSession != null ? vpnSession : session};
+                Session[] activePool = vpnSessions != null ? vpnSessions
+                        : new Session[]{session};
                 try {
                     vpnSocksProxy = new SocksProxy(
                             activePool, vpnPort, windowSize, packetSize,
@@ -565,12 +571,16 @@ public class TunnelService extends Service {
     private void monitorConnection() throws Exception {
         while (wanted && !forceReconnect) {
             Session current = session;
-            Session currentVpn = vpnSession;
+            Session[] currentVpn = vpnSessions;
             if (current == null || !current.isConnected()) {
                 throw new Exception("session disconnected");
             }
-            if (currentVpn != null && !currentVpn.isConnected()) {
-                throw new Exception("VPN session disconnected");
+            if (currentVpn != null) {
+                for (Session s : currentVpn) {
+                    if (s != null && !s.isConnected()) {
+                        throw new Exception("VPN session disconnected");
+                    }
+                }
             }
             SocksProxy telegramProxy = telegramSocksProxy;
             SocksProxy vpnProxy = vpnSocksProxy;
@@ -668,7 +678,7 @@ public class TunnelService extends Service {
         SecureStore store = new SecureStore(this);
         ServerProfiles.Profile profile = ServerProfiles.active(store);
         Session primary = session;
-        Session secondary = vpnSession;
+        Session[] vpnPool = vpnSessions;
         SocksProxy telegram = telegramSocksProxy;
         SocksProxy vpn = vpnSocksProxy;
         boolean telegramRunning =
@@ -708,6 +718,13 @@ public class TunnelService extends Service {
                 runtime.totalMemory() - runtime.freeMemory();
         String hostKey = profile == null ? "нет профиля"
                 : SshHostKeys.trustedFingerprint(store, profile);
+        int activeSessionsCount = 0;
+        if (primary != null && primary.isConnected()) activeSessionsCount++;
+        if (vpnPool != null) {
+            for (Session s : vpnPool) {
+                if (s != null && s != primary && s.isConnected()) activeSessionsCount++;
+            }
+        }
         intent.putExtra("debug_enabled", true)
                 .putExtra("debug_version", BuildConfig.VERSION_NAME
                         + " (" + BuildConfig.VERSION_CODE + ")")
@@ -716,10 +733,7 @@ public class TunnelService extends Service {
                 .putExtra("debug_status", currentStatus)
                 .putExtra("debug_ssh_connected",
                         primary != null && primary.isConnected())
-                .putExtra("debug_ssh_sessions",
-                        (primary != null && primary.isConnected() ? 1 : 0)
-                                + (secondary != null
-                                && secondary.isConnected() ? 1 : 0))
+                .putExtra("debug_ssh_sessions", activeSessionsCount)
                 .putExtra("debug_ssh_endpoint", profile == null ? "—"
                         : profile.host + ":" + profile.sshPort)
                 .putExtra("debug_transport",
@@ -817,14 +831,18 @@ public class TunnelService extends Service {
         collectAndClose(telegramProxy);
         collectAndClose(vpnProxy);
         Session current = session;
-        Session currentVpn = vpnSession;
+        Session[] currentVpn = vpnSessions;
         session = null;
-        vpnSession = null;
+        vpnSessions = null;
         if (current != null) {
             try { current.disconnect(); } catch (Exception ignored) {}
         }
         if (currentVpn != null) {
-            try { currentVpn.disconnect(); } catch (Exception ignored) {}
+            for (Session s : currentVpn) {
+                if (s != null && s != current) {
+                    try { s.disconnect(); } catch (Exception ignored) {}
+                }
+            }
         }
     }
 

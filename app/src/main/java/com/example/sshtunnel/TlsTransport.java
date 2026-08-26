@@ -376,11 +376,11 @@ final class TlsTransport {
         }
 
         @Override public InputStream getInputStream(Socket socket) throws IOException {
-            return socket.getInputStream();
+            return new java.io.BufferedInputStream(socket.getInputStream(), 256 * 1024);
         }
 
         @Override public OutputStream getOutputStream(Socket socket) throws IOException {
-            return socket.getOutputStream();
+            return new java.io.BufferedOutputStream(socket.getOutputStream(), 256 * 1024);
         }
     }
 }

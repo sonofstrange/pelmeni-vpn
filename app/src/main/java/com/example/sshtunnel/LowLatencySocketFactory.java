@@ -54,10 +54,10 @@ final class LowLatencySocketFactory implements SocketFactory {
     }
 
     @Override public InputStream getInputStream(Socket socket) throws IOException {
-        return new java.io.BufferedInputStream(socket.getInputStream(), 128 * 1024);
+        return socket.getInputStream();
     }
 
     @Override public OutputStream getOutputStream(Socket socket) throws IOException {
-        return new java.io.BufferedOutputStream(socket.getOutputStream(), 128 * 1024);
+        return socket.getOutputStream();
     }
 }

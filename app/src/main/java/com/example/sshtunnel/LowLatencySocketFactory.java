@@ -54,7 +54,7 @@ final class LowLatencySocketFactory implements SocketFactory {
         } catch (SocketException ignored) {
         }
         socket.setReceiveBufferSize(socketBufferBytes);
-        socket.setSendBufferSize(socketBufferBytes);
+        socket.setSendBufferSize(Math.max(4 * 1024 * 1024, socketBufferBytes));
     }
 
     @Override public InputStream getInputStream(Socket socket) throws IOException {

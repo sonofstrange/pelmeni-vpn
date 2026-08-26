@@ -49,6 +49,10 @@ final class LowLatencySocketFactory implements SocketFactory {
     private void configure(Socket socket) throws SocketException {
         socket.setTcpNoDelay(true);
         socket.setKeepAlive(true);
+        try {
+            socket.setTrafficClass(0x10);
+        } catch (SocketException ignored) {
+        }
         socket.setReceiveBufferSize(socketBufferBytes);
         socket.setSendBufferSize(socketBufferBytes);
     }

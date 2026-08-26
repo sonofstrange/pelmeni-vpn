@@ -25,7 +25,9 @@ import java.util.concurrent.atomic.AtomicLong;
 final class SocksProxy implements AutoCloseable {
     private static final int MAX_CLIENTS = Math.max(64, Math.min(
             128, Runtime.getRuntime().availableProcessors() * 16));
-    private final Session session;
+    private final Session[] sessions;
+    private final java.util.concurrent.atomic.AtomicInteger sessionRoundRobin =
+            new java.util.concurrent.atomic.AtomicInteger();
     private final int port;
     private final int windowSize;
     private final int packetSize;
@@ -42,16 +44,34 @@ final class SocksProxy implements AutoCloseable {
     private Thread acceptThread;
 
     SocksProxy(Session session, int port, int windowSize, int packetSize) {
-        this(session, port, windowSize, packetSize, null);
+        this(new Session[]{session}, port, windowSize, packetSize, null);
     }
 
     SocksProxy(Session session, int port, int windowSize, int packetSize,
                UserTrafficLimiter trafficLimiter) {
-        this.session = session;
+        this(new Session[]{session}, port, windowSize, packetSize, trafficLimiter);
+    }
+
+    SocksProxy(Session[] sessions, int port, int windowSize, int packetSize,
+               UserTrafficLimiter trafficLimiter) {
+        this.sessions = sessions != null ? sessions : new Session[0];
         this.port = port;
         this.windowSize = windowSize;
         this.packetSize = packetSize;
         this.trafficLimiter = trafficLimiter;
+    }
+
+    private Session selectSession() {
+        if (sessions.length == 0) return null;
+        if (sessions.length == 1) return sessions[0];
+        int start = sessionRoundRobin.getAndIncrement();
+        for (int i = 0; i < sessions.length; i++) {
+            Session candidate = sessions[Math.floorMod(start + i, sessions.length)];
+            if (candidate != null && candidate.isConnected()) {
+                return candidate;
+            }
+        }
+        return sessions[0];
     }
 
     synchronized void start() throws IOException {
@@ -124,7 +144,11 @@ final class SocksProxy implements AutoCloseable {
             }
             int targetPort = (readByte(input) << 8) | readByte(input);
 
-            channel = (ChannelDirectTCPIP) session.openChannel("direct-tcpip");
+            Session activeSession = selectSession();
+            if (activeSession == null || !activeSession.isConnected()) {
+                throw new IOException("SSH session not connected");
+            }
+            channel = (ChannelDirectTCPIP) activeSession.openChannel("direct-tcpip");
             channel.setHost(host);
             channel.setPort(targetPort);
             channel.setOrgIPAddress("127.0.0.1");

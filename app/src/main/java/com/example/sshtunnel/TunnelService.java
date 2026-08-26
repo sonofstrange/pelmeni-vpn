@@ -389,9 +389,11 @@ public class TunnelService extends Service {
                 newTelegramProxy.start();
             }
             if (vpnEnabled) {
+                Session[] vpnPool = newVpnSession != null && newSession != null
+                        ? new Session[]{newVpnSession, newSession}
+                        : new Session[]{newVpnSession == null ? newSession : newVpnSession};
                 newVpnProxy = new SocksProxy(
-                        newVpnSession == null ? newSession : newVpnSession,
-                        vpnPort, windowSize, packetSize, newTrafficLimiter);
+                        vpnPool, vpnPort, windowSize, packetSize, newTrafficLimiter);
                 newVpnProxy.start();
             }
             if (!wanted || forceReconnect) throw new JSchException("reconnect requested");
@@ -509,11 +511,12 @@ public class TunnelService extends Service {
                     vpnSession = null;
                 }
             } else if (vpnEnabled && vpnSocksProxy == null) {
-                Session activeVpnSession = vpnSession != null && vpnSession.isConnected()
-                        ? vpnSession : session;
+                Session[] activePool = vpnSession != null && session != null
+                        ? new Session[]{vpnSession, session}
+                        : new Session[]{vpnSession != null ? vpnSession : session};
                 try {
                     vpnSocksProxy = new SocksProxy(
-                            activeVpnSession, vpnPort, windowSize, packetSize,
+                            activePool, vpnPort, windowSize, packetSize,
                             trafficLimiter);
                     vpnSocksProxy.start();
                 } catch (Exception e) {
@@ -545,7 +548,7 @@ public class TunnelService extends Service {
         result.setConfig("cipher.c2s",
                 "chacha20-poly1305@openssh.com,aes128-gcm@openssh.com,aes256-gcm@openssh.com,aes128-ctr,aes256-ctr");
         result.setConfig("cipher.s2c",
-                "chacha20-poly1305@openssh.com,aes128-gcm@openssh.com,aes256-gcm@openssh.com,aes128-ctr,aes256-ctr");
+                "aes128-gcm@openssh.com,aes256-gcm@openssh.com,chacha20-poly1305@openssh.com,aes128-ctr,aes256-ctr");
         result.setConfig("mac.c2s",
                 "hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha2-256,hmac-sha2-512");
         result.setConfig("mac.s2c",

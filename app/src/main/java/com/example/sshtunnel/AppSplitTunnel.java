@@ -62,6 +62,7 @@ final class AppSplitTunnel {
             String ownPackage) throws Exception {
         if (!config.enabled) {
             disallowIfInstalled(builder, packages, ownPackage);
+            disallowSystemCaptiveServices(builder, packages);
             return;
         }
         if (MODE_ONLY.equals(config.mode)) {
@@ -86,6 +87,26 @@ final class AppSplitTunnel {
         }
         if (!config.packages.contains(ownPackage)) {
             disallowIfInstalled(builder, packages, ownPackage);
+        }
+        disallowSystemCaptiveServices(builder, packages);
+    }
+
+    private static void disallowSystemCaptiveServices(
+            VpnService.Builder builder, PackageManager packages) {
+        String[] systemServices = {
+                "com.android.captiveportallogin",
+                "com.google.android.captiveportallogin",
+                "com.android.networkstack",
+                "com.google.android.networkstack",
+                "com.android.networkstack.process",
+                "com.google.android.networkstack.process",
+                "com.android.providers.settings"
+        };
+        for (String pkg : systemServices) {
+            try {
+                disallowIfInstalled(builder, packages, pkg);
+            } catch (Exception ignored) {
+            }
         }
     }
 

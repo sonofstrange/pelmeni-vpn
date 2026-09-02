@@ -150,7 +150,18 @@ public class TunnelService extends Service {
                 discardUnderlyingNetwork(network);
             }
         };
-        connectivityManager.registerDefaultNetworkCallback(networkCallback);
+        try {
+            NetworkRequest request = new NetworkRequest.Builder()
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                    .build();
+            connectivityManager.registerNetworkCallback(request, networkCallback);
+        } catch (Exception fallback) {
+            try {
+                connectivityManager.registerDefaultNetworkCallback(networkCallback);
+            } catch (Exception ignored) {
+            }
+        }
     }
 
     private void checkAndStage(
@@ -245,20 +256,27 @@ public class TunnelService extends Service {
         long deadline = SystemClock.elapsedRealtime() + timeoutMs;
         synchronized (this) {
             if (activeUnderlyingNetwork == null && connectivityManager != null) {
-                Network active = connectivityManager.getActiveNetwork();
-                if (active != null) {
-                    NetworkCapabilities caps =
-                            connectivityManager.getNetworkCapabilities(active);
-                    if (caps != null && UnderlyingNetworkPolicy.usable(
-                            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET),
-                            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED),
-                            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN),
-                            Build.VERSION.SDK_INT < 28 || caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED))) {
-                        activeUnderlyingNetwork = active;
+                Network[] all = null;
+                try {
+                    all = connectivityManager.getAllNetworks();
+                } catch (Exception ignored) {
+                }
+                if (all != null) {
+                    for (Network net : all) {
+                        NetworkCapabilities caps = connectivityManager.getNetworkCapabilities(net);
+                        if (caps != null && UnderlyingNetworkPolicy.usable(
+                                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET),
+                                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED),
+                                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN),
+                                Build.VERSION.SDK_INT < 28 || caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED))) {
+                            activeUnderlyingNetwork = net;
+                            break;
+                        }
                     }
                 }
             }
             while (wanted && activeUnderlyingNetwork == null) {
+                send("Ожидание сети Wi-Fi или сотовой связи…");
                 long remaining = deadline - SystemClock.elapsedRealtime();
                 if (remaining <= 0) break;
                 wait(remaining);

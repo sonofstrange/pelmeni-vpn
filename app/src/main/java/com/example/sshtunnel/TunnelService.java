@@ -132,28 +132,18 @@ public class TunnelService extends Service {
         if (networkCallback != null) return;
         networkCallback = new ConnectivityManager.NetworkCallback() {
             @Override public void onAvailable(Network network) {
-                // Android delivers the ordered capabilities immediately afterwards.
-                // Selecting here would race with validation and link setup.
+                if (connectivityManager != null) {
+                    NetworkCapabilities capabilities =
+                            connectivityManager.getNetworkCapabilities(network);
+                    if (capabilities != null) {
+                        checkAndStage(network, capabilities);
+                    }
+                }
             }
 
             @Override public void onCapabilitiesChanged(
                     Network network, NetworkCapabilities capabilities) {
-                boolean notSuspended = Build.VERSION.SDK_INT < 28
-                        || capabilities.hasCapability(
-                        NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED);
-                boolean usable = UnderlyingNetworkPolicy.usable(
-                        capabilities.hasCapability(
-                                NetworkCapabilities.NET_CAPABILITY_INTERNET),
-                        capabilities.hasCapability(
-                                NetworkCapabilities.NET_CAPABILITY_VALIDATED),
-                        capabilities.hasCapability(
-                                NetworkCapabilities.NET_CAPABILITY_NOT_VPN),
-                        notSuspended);
-                if (usable) {
-                    stageUnderlyingNetwork(network);
-                } else {
-                    discardUnderlyingNetwork(network);
-                }
+                checkAndStage(network, capabilities);
             }
 
             @Override public void onLost(Network network) {
@@ -161,6 +151,26 @@ public class TunnelService extends Service {
             }
         };
         connectivityManager.registerDefaultNetworkCallback(networkCallback);
+    }
+
+    private void checkAndStage(
+            Network network, NetworkCapabilities capabilities) {
+        boolean notSuspended = Build.VERSION.SDK_INT < 28
+                || capabilities.hasCapability(
+                NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED);
+        boolean usable = UnderlyingNetworkPolicy.usable(
+                capabilities.hasCapability(
+                        NetworkCapabilities.NET_CAPABILITY_INTERNET),
+                capabilities.hasCapability(
+                        NetworkCapabilities.NET_CAPABILITY_VALIDATED),
+                capabilities.hasCapability(
+                        NetworkCapabilities.NET_CAPABILITY_NOT_VPN),
+                notSuspended);
+        if (usable) {
+            stageUnderlyingNetwork(network);
+        } else {
+            discardUnderlyingNetwork(network);
+        }
     }
 
     private void stageUnderlyingNetwork(Network network) {
@@ -198,6 +208,9 @@ public class TunnelService extends Service {
             pendingNetworkSwitch = null;
             wakeConnectionLoop();
         }
+        LowLatencySocketFactory.clearDnsCache();
+        TlsTransport.clearDnsCache();
+        QuickSettingsTileService.requestUpdate(this);
         if (handoff || wasDisconnected) {
             requestReconnect(
                     "Сеть стабилизировалась, обновляем VPN-соединение…");
@@ -231,6 +244,20 @@ public class TunnelService extends Service {
     private Network awaitUnderlyingNetwork(long timeoutMs) throws InterruptedException {
         long deadline = SystemClock.elapsedRealtime() + timeoutMs;
         synchronized (this) {
+            if (activeUnderlyingNetwork == null && connectivityManager != null) {
+                Network active = connectivityManager.getActiveNetwork();
+                if (active != null) {
+                    NetworkCapabilities caps =
+                            connectivityManager.getNetworkCapabilities(active);
+                    if (caps != null && UnderlyingNetworkPolicy.usable(
+                            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET),
+                            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED),
+                            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN),
+                            Build.VERSION.SDK_INT < 28 || caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED))) {
+                        activeUnderlyingNetwork = active;
+                    }
+                }
+            }
             while (wanted && activeUnderlyingNetwork == null) {
                 long remaining = deadline - SystemClock.elapsedRealtime();
                 if (remaining <= 0) break;
@@ -659,9 +686,26 @@ public class TunnelService extends Service {
         if (statsTicks % 30 == 0) persistTotals();
         if (statsTicks % 5 == 0) recordPolicyUsage(bytes);
 
+        if (connected && statsTicks % 3 == 0) {
+            Session currentSession = session;
+            if (currentSession != null && currentSession.isConnected()) {
+                statsWorker.execute(() -> {
+                    try {
+                        long t0 = SystemClock.elapsedRealtime();
+                        currentSession.sendKeepAliveMsg();
+                        long rtt = SystemClock.elapsedRealtime() - t0;
+                        if (rtt >= 0 && rtt < 5000) {
+                            currentLatency = (int) rtt;
+                        }
+                    } catch (Exception ignored) {
+                    }
+                });
+            }
+        }
+
         Intent statsIntent = new Intent(ACTION_STATUS).setPackage(getPackageName())
                 .putExtra("speed_bps", speed)
-                .putExtra("ping_ms", latency)
+                .putExtra("ping_ms", currentLatency)
                 .putExtra("session_uploaded", traffic[0])
                 .putExtra("session_downloaded", traffic[1])
                 .putExtra("total_uploaded", totalUploaded + traffic[0])
@@ -939,10 +983,9 @@ public class TunnelService extends Service {
         sendBroadcast(new Intent(ACTION_STATUS).setPackage(getPackageName())
                 .putExtra("status", text)
                 .putExtra(EXTRA_RUNNING, wanted));
-        android.service.quicksettings.TileService.requestListeningState(
-                this, new ComponentName(this, QuickSettingsTileService.class));
+        QuickSettingsTileService.requestUpdate(this);
         NotificationManager nm = getSystemService(NotificationManager.class);
-        nm.notify(ID, note(text));
+        if (nm != null) nm.notify(ID, note(text));
     }
 
     private Notification note(String text) {

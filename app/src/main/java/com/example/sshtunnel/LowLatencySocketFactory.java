@@ -13,8 +13,27 @@ import java.net.SocketException;
 
 /** Creates a low-latency SSH socket with enough TCP buffering for high-RTT links. */
 final class LowLatencySocketFactory implements SocketFactory {
-    private static final java.util.Map<String, java.net.InetAddress> DNS_CACHE =
+    private static final class DnsEntry {
+        final java.net.InetAddress address;
+        final long expiresAt;
+
+        DnsEntry(java.net.InetAddress address) {
+            this.address = address;
+            this.expiresAt = android.os.SystemClock.elapsedRealtime() + 60_000L;
+        }
+
+        boolean isValid() {
+            return android.os.SystemClock.elapsedRealtime() < expiresAt;
+        }
+    }
+
+    private static final java.util.Map<String, DnsEntry> DNS_CACHE =
             new java.util.concurrent.ConcurrentHashMap<>();
+
+    static void clearDnsCache() {
+        DNS_CACHE.clear();
+    }
+
     private final Network network;
     private final int socketBufferBytes;
 
@@ -31,14 +50,20 @@ final class LowLatencySocketFactory implements SocketFactory {
         Socket socket = network == null
                 ? new Socket() : network.getSocketFactory().createSocket();
         configure(socket);
-        java.net.InetAddress ip;
-        try {
-            ip = network == null
-                    ? java.net.InetAddress.getByName(host) : network.getByName(host);
-            DNS_CACHE.put(host, ip);
-        } catch (IOException dnsError) {
-            ip = DNS_CACHE.get(host);
-            if (ip == null) throw dnsError;
+        java.net.InetAddress ip = null;
+        DnsEntry cached = DNS_CACHE.get(host);
+        if (cached != null && cached.isValid()) {
+            ip = cached.address;
+        }
+        if (ip == null) {
+            try {
+                ip = network == null
+                        ? java.net.InetAddress.getByName(host) : network.getByName(host);
+                DNS_CACHE.put(host, new DnsEntry(ip));
+            } catch (IOException dnsError) {
+                if (cached != null) ip = cached.address;
+                else throw dnsError;
+            }
         }
         InetSocketAddress address = new InetSocketAddress(ip, port);
         socket.connect(address, 15_000);
@@ -50,7 +75,7 @@ final class LowLatencySocketFactory implements SocketFactory {
         socket.setTcpNoDelay(true);
         socket.setKeepAlive(true);
         try {
-            socket.setTrafficClass(0x10);
+            socket.setTrafficClass(0x10); // IPTOS_LOWDELAY
         } catch (SocketException ignored) {
         }
         socket.setReceiveBufferSize(socketBufferBytes);

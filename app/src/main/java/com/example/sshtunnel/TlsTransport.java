@@ -293,8 +293,26 @@ final class TlsTransport {
     private TlsTransport() {
     }
 
+    static void clearDnsCache() {
+        TlsSocketFactory.DNS_CACHE.clear();
+    }
+
     private static final class TlsSocketFactory implements SocketFactory {
-        private static final java.util.Map<String, java.net.InetAddress> DNS_CACHE =
+        private static final class DnsEntry {
+            final java.net.InetAddress address;
+            final long expiresAt;
+
+            DnsEntry(java.net.InetAddress address) {
+                this.address = address;
+                this.expiresAt = android.os.SystemClock.elapsedRealtime() + 60_000L;
+            }
+
+            boolean isValid() {
+                return android.os.SystemClock.elapsedRealtime() < expiresAt;
+            }
+        }
+
+        private static final java.util.Map<String, DnsEntry> DNS_CACHE =
                 new java.util.concurrent.ConcurrentHashMap<>();
         private final SecureStore store;
         private final Network network;
@@ -338,19 +356,25 @@ final class TlsTransport {
                 raw.setTcpNoDelay(true);
                 raw.setKeepAlive(true);
                 try {
-                    raw.setTrafficClass(0x10);
+                    raw.setTrafficClass(0x10); // IPTOS_LOWDELAY
                 } catch (Exception ignored) {
                 }
                 raw.setReceiveBufferSize(socketBufferBytes);
                 raw.setSendBufferSize(Math.max(4 * 1024 * 1024, socketBufferBytes));
-                java.net.InetAddress ip;
-                try {
-                    ip = network == null
-                            ? java.net.InetAddress.getByName(host) : network.getByName(host);
-                    DNS_CACHE.put(host, ip);
-                } catch (IOException dnsError) {
-                    ip = DNS_CACHE.get(host);
-                    if (ip == null) throw dnsError;
+                java.net.InetAddress ip = null;
+                DnsEntry cached = DNS_CACHE.get(host);
+                if (cached != null && cached.isValid()) {
+                    ip = cached.address;
+                }
+                if (ip == null) {
+                    try {
+                        ip = network == null
+                                ? java.net.InetAddress.getByName(host) : network.getByName(host);
+                        DNS_CACHE.put(host, new DnsEntry(ip));
+                    } catch (IOException dnsError) {
+                        if (cached != null) ip = cached.address;
+                        else throw dnsError;
+                    }
                 }
                 InetSocketAddress address = new InetSocketAddress(ip, tlsPort);
                 raw.connect(address, tlsPorts.length > 1 ? 4_000 : 15_000);

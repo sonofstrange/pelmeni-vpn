@@ -213,6 +213,12 @@ final class ServerAccessManager {
                 new JSONObject().put("login", login));
     }
 
+    static void revokeAllPublic(
+            SecureStore store, ServerProfiles.Profile profile, String publicPool) throws Exception {
+        run(profileCredentials(store, profile), "revoke_all_public",
+                new JSONObject().put("pool", publicPool == null ? "" : publicPool));
+    }
+
     static ManagedUser updateLimits(
             SecureStore store, ServerProfiles.Profile profile, String login,
             long dailyMb, long monthlyMb, long speedMbps) throws Exception {
@@ -524,6 +530,17 @@ final class ServerAccessManager {
                 "  users[:]=[x for x in users if x['login']!=login]",
                 "  subprocess.run(['userdel','-r',login],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)",
                 "  save()",
+                " elif action=='revoke_all_public':",
+                "  pool=req.get('pool','')",
+                "  to_delete=[x['login'] for x in users if x.get('login','').startswith('pel_pub_') and (not pool or x.get('public_pool')==pool)]",
+                "  users[:]=[x for x in users if x['login'] not in to_delete]",
+                "  for ulog in to_delete: subprocess.run(['userdel','-r',ulog],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)",
+                "  save()",
+                "  try:",
+                "   claims=json.load(open('/etc/pelmeni-vpn/public-claims.json',encoding='utf-8'))",
+                "   claims={k:v for k,v in claims.items() if not (k.startswith(pool+':') if pool else True)}",
+                "   open('/etc/pelmeni-vpn/public-claims.json','w').write(json.dumps(claims)); os.chmod('/etc/pelmeni-vpn/public-claims.json',0o600)",
+                "  except Exception: pass",
                 " elif action=='import':",
                 "  for incoming in req.get('users',[]):",
                 "   name=incoming['login']",

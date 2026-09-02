@@ -428,6 +428,11 @@ public class MainActivity extends Activity {
                         "Открыть раздачу для каталога бесплатных серверов",
                         () -> showPublishServerPage(active));
             }
+            if (!publicUsers.isEmpty()) {
+                addPageAction(page, "Удалить всех участников (" + publicUsers.size() + ")",
+                        "Отозвать все выданные публичные аккаунты с сервера",
+                        () -> confirmRevokeAllPublicUsers(active, published != null ? published.poolId : ""));
+            }
 
             if (!publicUsers.isEmpty()) {
                 LinearLayout pubContainer = new LinearLayout(this);
@@ -1080,6 +1085,33 @@ public class MainActivity extends Activity {
                                 Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show());
                     }
                 }))
+                .setNegativeButton("Отмена", null)
+                .show();
+    }
+
+    private void confirmRevokeAllPublicUsers(
+            ServerProfiles.Profile profile, String poolId) {
+        new AlertDialog.Builder(this)
+                .setTitle("Удалить всех публичных участников?")
+                .setMessage("Все выданные публичные аккаунты (pel_pub_...) будут удалены с сервера, "
+                        + "их доступ перестанет работать. Личные пользователи затронуты не будут.")
+                .setPositiveButton("Удалить всех", (dialog, which) -> {
+                    Toast.makeText(this, "Удаляю участников с сервера…", Toast.LENGTH_SHORT).show();
+                    speedWorker.execute(() -> {
+                        try {
+                            SecureStore store = new SecureStore(this);
+                            ServerAccessManager.revokeAllPublic(store, profile, poolId);
+                            mainHandler.post(() -> {
+                                Toast.makeText(this, "Все публичные участники удалены", Toast.LENGTH_SHORT).show();
+                                showPeoplePage(null, null);
+                            });
+                        } catch (Exception error) {
+                            mainHandler.post(() -> Toast.makeText(this,
+                                    "Не удалось удалить: " + error.getMessage(),
+                                    Toast.LENGTH_LONG).show());
+                        }
+                    });
+                })
                 .setNegativeButton("Отмена", null)
                 .show();
     }
@@ -3177,40 +3209,40 @@ public class MainActivity extends Activity {
     }
 
     private void showPublishServerPage(ServerProfiles.Profile profile) {
-        if (!Branding.isDeveloperMode(this)) return;
         if (running) {
             Toast.makeText(this, "Сначала отключи VPN и прокси",
                     Toast.LENGTH_SHORT).show();
             return;
         }
         SecureStore store = new SecureStore(this);
+        PublicServerRegistry.Entry existing = PublicServerManager.saved(store, profile.id);
         LinearLayout page = createPageContent("Публичный сервер",
                 "Для каждого человека сервер создаст отдельный аккаунт. "
                         + "Админский пароль никогда не публикуется.");
         EditText name = addServerField(page, "Название в каталоге",
-                profile.name, InputType.TYPE_CLASS_TEXT
+                existing != null ? existing.name : profile.name, InputType.TYPE_CLASS_TEXT
                         | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
         EditText location = addServerField(page, "Страна или город",
-                "", InputType.TYPE_CLASS_TEXT
+                existing != null ? existing.location : "", InputType.TYPE_CLASS_TEXT
                         | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
         addSectionTitle(page, "Лимиты каждого пользователя");
         EditText days = addServerField(page, "Срок доступа · дней · 0 навсегда",
-                "30", InputType.TYPE_CLASS_NUMBER);
+                existing != null ? Integer.toString(existing.days) : "30", InputType.TYPE_CLASS_NUMBER);
         addQuickChoices(page, days, "1", "7", "30", "90");
         EditText daily = addServerField(page, "Трафик в день · МБ · 0 без лимита",
-                "1024", InputType.TYPE_CLASS_NUMBER);
+                existing != null ? Long.toString(existing.dailyMb) : "1024", InputType.TYPE_CLASS_NUMBER);
         addQuickChoices(page, daily, "256", "1024", "5120", "0");
         EditText monthly = addServerField(page,
                 "Трафик за 30 дней · МБ · 0 без лимита",
-                "10240", InputType.TYPE_CLASS_NUMBER);
+                existing != null ? Long.toString(existing.monthlyMb) : "10240", InputType.TYPE_CLASS_NUMBER);
         addQuickChoices(page, monthly, "5120", "10240", "51200", "0");
         EditText speed = addServerField(page,
                 "Скорость · Мбит/с · 0 без лимита",
-                "10", InputType.TYPE_CLASS_NUMBER);
+                existing != null ? Long.toString(existing.speedMbps) : "10", InputType.TYPE_CLASS_NUMBER);
         addQuickChoices(page, speed, "1", "5", "10", "25");
         EditText maxUsers = addServerField(page,
                 "Максимум активных пользователей",
-                "50", InputType.TYPE_CLASS_NUMBER);
+                existing != null ? Integer.toString(existing.maxUsers) : "50", InputType.TYPE_CLASS_NUMBER);
         addQuickChoices(page, maxUsers, "10", "25", "50", "100");
         boolean tlsAvailable =
                 TlsTransport.isConfiguredForProfile(store, profile);
@@ -3219,7 +3251,7 @@ public class MainActivity extends Activity {
                         ? "Новые пользователи автоматически получат "
                         + "TLS-сертификат."
                         : "TLS на этом сервере не настроен.",
-                tlsAvailable, value -> {
+                existing != null ? existing.tls : tlsAvailable, value -> {
                 });
         tls.setEnabled(tlsAvailable);
         LinearLayout warning = createCard();
@@ -3317,11 +3349,17 @@ public class MainActivity extends Activity {
                         + "\nTLS: " + (entry.tls ? "да" : "нет")
                         + "\nPool ID: " + entry.poolId);
         page.addView(details, pageCardParams());
+        addPageAction(page, "Изменить параметры раздачи",
+                "Обновить лимиты, срок или описание сервера в каталоге",
+                () -> showPublishServerPage(profile));
         addPageAction(page, "Открыть публикацию GitHub",
                 "Создать Issue или открыть новую заполненную форму",
                 () -> openPublicServerPublication(entry));
+        addPageAction(page, "Очистить всех участников",
+                "Удалить все выданные аккаунты этого публичного пула с сервера",
+                () -> confirmRevokeAllPublicUsers(profile, entry.poolId));
         Button disable = new Button(this);
-        disable.setText("ОТКЛЮЧИТЬ НОВУЮ ВЫДАЧУ");
+        disable.setText("ОТКЛЮЧИТЬ И УДАЛИТЬ РАЗДАЧУ");
         disable.setTextColor(0xFFFF7272);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, dp(56));
@@ -3330,9 +3368,8 @@ public class MainActivity extends Activity {
         disable.setOnClickListener(v -> new AlertDialog.Builder(this)
                 .setTitle("Отключить публичный режим?")
                 .setMessage("Новые люди больше не смогут получать аккаунты. "
-                        + "Уже выданные доступы продолжат работать. "
-                        + "Также закрой GitHub Issue, чтобы убрать запись "
-                        + "из каталога.")
+                        + "Уже выданные доступы продолжат работать, пока ты не нажмёшь «Очистить всех участников». "
+                        + "Также закрой GitHub Issue, чтобы убрать запись из каталога.")
                 .setPositiveButton("Отключить", (dialog, which) -> {
                     disable.setEnabled(false);
                     disable.setText("ОТКЛЮЧАЮ…");
@@ -3343,7 +3380,7 @@ public class MainActivity extends Activity {
                                     profile, entry);
                             mainHandler.post(() -> {
                                 Toast.makeText(this,
-                                        "Новая выдача отключена. "
+                                        "Публичный режим отключён. "
                                                 + "Закрой GitHub Issue.",
                                         Toast.LENGTH_LONG).show();
                                 showServerEditor(profile);
@@ -3352,7 +3389,7 @@ public class MainActivity extends Activity {
                             mainHandler.post(() -> {
                                 disable.setEnabled(true);
                                 disable.setText(
-                                        "ОТКЛЮЧИТЬ НОВУЮ ВЫДАЧУ");
+                                        "ОТКЛЮЧИТЬ И УДАЛИТЬ РАЗДАЧУ");
                                 Toast.makeText(this,
                                         "Не удалось отключить: "
                                                 + error.getMessage(),

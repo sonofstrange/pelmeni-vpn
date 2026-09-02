@@ -264,6 +264,7 @@ public class VpnTunnelService extends VpnService {
         stopping = true;
         cleanupNative();
         if (stopSsh) stopSshService();
+        QuickSettingsTileService.requestUpdate(this);
         stopForeground(STOP_FOREGROUND_REMOVE);
         stopSelf();
     }
@@ -305,6 +306,7 @@ public class VpnTunnelService extends VpnService {
             cleanupNative();
             stopSshService();
         }
+        QuickSettingsTileService.requestUpdate(this);
         worker.shutdownNow();
         super.onDestroy();
     }
@@ -343,6 +345,7 @@ public class VpnTunnelService extends VpnService {
         sendBroadcast(new Intent(TunnelService.ACTION_STATUS)
                 .setPackage(getPackageName())
                 .putExtra("status", text));
+        QuickSettingsTileService.requestUpdate(this);
         getSystemService(NotificationManager.class).notify(ID, notification(text));
     }
 

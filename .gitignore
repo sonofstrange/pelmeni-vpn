@@ -16,6 +16,8 @@ captures/
 *.aab
 *.jks
 *.keystore
+*.exe
+release/
 /PelmeniVPN-logo-*.png
 
 # OS metadata

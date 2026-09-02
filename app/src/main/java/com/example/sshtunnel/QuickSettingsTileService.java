@@ -3,6 +3,7 @@ package com.example.sshtunnel;
 import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.graphics.drawable.Icon;
 import android.net.VpnService;
 import android.os.Build;
@@ -16,9 +17,45 @@ public class QuickSettingsTileService extends TileService {
                 : R.drawable.ic_pelmeni_logo_tile_from_svg;
     }
 
+    private android.content.BroadcastReceiver statusReceiver;
+
+    public static void requestUpdate(Context context) {
+        if (context == null || Build.VERSION.SDK_INT < 24) return;
+        try {
+            TileService.requestListeningState(context,
+                    new android.content.ComponentName(context, QuickSettingsTileService.class));
+        } catch (Exception ignored) {
+        }
+    }
+
     @Override public void onStartListening() {
         super.onStartListening();
+        if (statusReceiver == null) {
+            statusReceiver = new android.content.BroadcastReceiver() {
+                @Override public void onReceive(Context context, Intent intent) {
+                    updateTile();
+                }
+            };
+            IntentFilter filter = new IntentFilter(TunnelService.ACTION_STATUS);
+            filter.addAction(Branding.ACTION_CHANGED);
+            if (Build.VERSION.SDK_INT >= 33) {
+                registerReceiver(statusReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                registerReceiver(statusReceiver, filter);
+            }
+        }
         updateTile();
+    }
+
+    @Override public void onStopListening() {
+        if (statusReceiver != null) {
+            try {
+                unregisterReceiver(statusReceiver);
+            } catch (Exception ignored) {
+            }
+            statusReceiver = null;
+        }
+        super.onStopListening();
     }
 
     @Override public void onClick() {
@@ -31,6 +68,7 @@ public class QuickSettingsTileService extends TileService {
             store.putBoolean("enabled", false);
             startService(new Intent(this, TunnelService.class).setAction(TunnelService.STOP));
             updateTile();
+            requestUpdate(this);
             return;
         }
         if (store.getBoolean("enabled", false)) store.putBoolean("enabled", false);
@@ -62,6 +100,7 @@ public class QuickSettingsTileService extends TileService {
             else startService(vpn);
         }
         updateTile();
+        requestUpdate(this);
     }
 
     @android.annotation.SuppressLint("StartActivityAndCollapseDeprecated")
@@ -82,19 +121,38 @@ public class QuickSettingsTileService extends TileService {
         Tile tile = getQsTile();
         if (tile == null) return;
         SecureStore store = new SecureStore(this);
-        boolean enabled = store.getBoolean("enabled", false) && TunnelService.isActive();
-        boolean connected = enabled && TunnelService.isConnected();
-        tile.setState(connected ? Tile.STATE_ACTIVE : Tile.STATE_INACTIVE);
+        boolean active = TunnelService.isActive();
+        boolean enabled = store.getBoolean("enabled", false);
+        boolean connected = active && TunnelService.isConnected();
+        boolean connecting = enabled && !connected;
+        boolean disconnecting = !enabled && active;
+
+        int state;
+        String subtitle;
+        if (connected) {
+            state = Tile.STATE_ACTIVE;
+            subtitle = TunnelMode.label(store);
+        } else if (connecting) {
+            state = Tile.STATE_UNAVAILABLE;
+            subtitle = "Подключение…";
+        } else if (disconnecting) {
+            state = Tile.STATE_UNAVAILABLE;
+            subtitle = "Отключение…";
+        } else {
+            state = Tile.STATE_INACTIVE;
+            subtitle = "Выключено";
+        }
+
+        tile.setState(state);
         tile.setIcon(Icon.createWithResource(this, iconResource(this)));
         String name = Branding.appName(this);
         if (Build.VERSION.SDK_INT >= 29) {
             tile.setLabel(name);
-            tile.setSubtitle(connected
-                    ? TunnelMode.label(store)
-                    : enabled ? "Подключение…" : "Выключено");
+            tile.setSubtitle(subtitle);
         } else {
             tile.setLabel(connected ? name + ": вкл."
-                    : enabled ? name + ": подключение…" : name);
+                    : connecting ? name + ": подключение…"
+                    : disconnecting ? name + ": отключение…" : name);
         }
         tile.updateTile();
     }

@@ -2655,8 +2655,7 @@ public class MainActivity extends Activity {
             serverAddress.setText("Локация: " + getSelectedPublicLocationLabel());
             serverSelect.setText("СМЕНИТЬ");
             serverEdit.setText("ЛОКАЦИЯ");
-            userLimitSummary.setVisibility(View.GONE);
-            userTrafficLimitPanel.setVisibility(View.GONE);
+            updateAccessLimitSummary();
             return;
         }
         ServerProfiles.Profile active =
@@ -2667,6 +2666,7 @@ public class MainActivity extends Activity {
             serverSelect.setText("ДОБАВИТЬ");
             serverEdit.setText("ДОБАВИТЬ");
             userLimitSummary.setVisibility(View.GONE);
+            userTrafficLimitPanel.setVisibility(View.GONE);
             return;
         }
         serverName.setText(active.name);
@@ -2706,7 +2706,8 @@ public class MainActivity extends Activity {
         boolean notificationsBlocked = Build.VERSION.SDK_INT >= 33
                 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
                 != android.content.pm.PackageManager.PERMISSION_GRANTED;
-        userLimitSummary.setText("Ваш доступ · " + expiry + "\n"
+        String titlePrefix = isPublicModeActive() ? "Публичный доступ · " : "Ваш доступ · ";
+        userLimitSummary.setText(titlePrefix + expiry + "\n"
                 + daily + " · " + monthly + "\nСкорость: " + speed
                 + (policy.dailyMb > 0 ? "\nДневной сброс "
                 + limitResetCountdown(policy.issuedAt, false) : "")

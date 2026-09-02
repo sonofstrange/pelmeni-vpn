@@ -1103,7 +1103,7 @@ public class MainActivity extends Activity {
                             ServerAccessManager.revokeAllPublic(store, profile, poolId);
                             mainHandler.post(() -> {
                                 Toast.makeText(this, "Все публичные участники удалены", Toast.LENGTH_SHORT).show();
-                                showPeoplePage(null, null);
+                                loadManagedUsers();
                             });
                         } catch (Exception error) {
                             mainHandler.post(() -> Toast.makeText(this,
@@ -1295,37 +1295,20 @@ public class MainActivity extends Activity {
     }
 
     private void addCardTitle(LinearLayout card, String title, boolean verified) {
-        if (!verified) {
-            TextView view = new TextView(this);
-            view.setText(title);
-            view.setTextColor(0xFFF3F4F6);
-            view.setTextSize(16);
-            view.setTypeface(null, android.graphics.Typeface.BOLD);
-            card.addView(view);
-            return;
-        }
-        LinearLayout header = new LinearLayout(this);
-        header.setOrientation(LinearLayout.HORIZONTAL);
-        header.setGravity(android.view.Gravity.CENTER_VERTICAL);
-        LinearLayout.LayoutParams headerParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT);
-        header.setLayoutParams(headerParams);
-
         TextView view = new TextView(this);
         view.setText(title);
         view.setTextColor(0xFFF3F4F6);
         view.setTextSize(16);
         view.setTypeface(null, android.graphics.Typeface.BOLD);
-        header.addView(view);
-
-        ImageView badge = new ImageView(this);
-        badge.setImageResource(R.drawable.ic_verified_badge);
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(20), dp(20));
-        params.leftMargin = dp(6);
-        header.addView(badge, params);
-
-        card.addView(header);
+        if (verified) {
+            android.graphics.drawable.Drawable badge = getDrawable(R.drawable.ic_verified_badge);
+            if (badge != null) {
+                badge.setBounds(0, 0, dp(18), dp(18));
+                view.setCompoundDrawables(null, null, badge, null);
+                view.setCompoundDrawablePadding(dp(6));
+            }
+        }
+        card.addView(view);
     }
 
     private void addCardSubtitle(LinearLayout card, String subtitle) {

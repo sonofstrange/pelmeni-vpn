@@ -4513,7 +4513,9 @@ public class MainActivity extends Activity {
 
     private void stopTunnel() {
         startService(new Intent(this, TunnelService.class).setAction(TunnelService.STOP));
-        update("Отключено");
+        startService(new Intent(this, VpnTunnelService.class).setAction(VpnTunnelService.STOP));
+        QuickSettingsTileService.requestUpdate(this);
+        update("Отключено", false);
     }
 
     private void update(String text) {

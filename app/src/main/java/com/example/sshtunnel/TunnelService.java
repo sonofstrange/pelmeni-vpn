@@ -966,6 +966,7 @@ public class TunnelService extends Service {
     private void stopAfterFailure(String message) {
         wanted = false;
         connected = false;
+        serviceActive = false;
         new SecureStore(this).putBoolean("enabled", false);
         startService(new Intent(this, VpnTunnelService.class)
                 .setAction(VpnTunnelService.STOP)
@@ -974,7 +975,12 @@ public class TunnelService extends Service {
         persistFinalTotals();
         send(message);
         stopForeground(STOP_FOREGROUND_REMOVE);
-        getSystemService(NotificationManager.class).cancel(ID);
+        try {
+            NotificationManager nm = getSystemService(NotificationManager.class);
+            if (nm != null) nm.cancel(ID);
+        } catch (Exception ignored) {
+        }
+        QuickSettingsTileService.requestUpdate(this);
         stopSelf();
     }
 
@@ -1068,6 +1074,13 @@ public class TunnelService extends Service {
         }
         worker.shutdownNow();
         statsWorker.shutdownNow();
+        stopForeground(STOP_FOREGROUND_REMOVE);
+        try {
+            NotificationManager nm = getSystemService(NotificationManager.class);
+            if (nm != null) nm.cancel(ID);
+        } catch (Exception ignored) {
+        }
+        QuickSettingsTileService.requestUpdate(this);
         super.onDestroy();
     }
 

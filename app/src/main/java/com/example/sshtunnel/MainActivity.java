@@ -2878,24 +2878,68 @@ public class MainActivity extends Activity {
                     "Опубликовать свой сервер можно из его настроек.");
             page.addView(empty, pageCardParams());
         }
+        SecureStore store = new SecureStore(this);
+        List<ServerProfiles.Profile> myAdminServers = adminServers(store);
+        List<ServerProfiles.Profile> allProfiles = ServerProfiles.list(store);
         for (PublicServerRegistry.Entry entry : entries) {
+            ServerProfiles.Profile ownedProfile = null;
+            for (ServerProfiles.Profile admin : myAdminServers) {
+                if (admin.host.equalsIgnoreCase(entry.host)) {
+                    ownedProfile = admin;
+                    break;
+                }
+            }
+            boolean alreadyAdded = false;
+            for (ServerProfiles.Profile p : allProfiles) {
+                if (p.host.equalsIgnoreCase(entry.host)) {
+                    alreadyAdded = true;
+                    break;
+                }
+            }
             LinearLayout card = createCard();
-            addCardTitle(card, entry.name);
-            addCardSubtitle(card,
-                    (entry.location.isEmpty()
-                            ? "Регион не указан" : entry.location)
-                            + "\n" + entry.limitsLabel()
-                            + "\nTLS: " + (entry.tls ? "включён" : "нет")
-                            + "\nSSH fingerprint: " + entry.fingerprint);
-            Button connect = new Button(this);
-            connect.setText("ПОЛУЧИТЬ ЛИЧНЫЙ ДОСТУП");
-            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, dp(52));
-            params.topMargin = dp(10);
-            card.addView(connect, params);
-            connect.setOnClickListener(v ->
-                    claimPublicServer(entry, connect));
+            String title = entry.name + (entry.verified ? "  ✓" : "")
+                    + (ownedProfile != null ? "  (Ваш сервер)" : "");
+            addCardTitle(card, title);
+
+            StringBuilder sub = new StringBuilder();
+            if (entry.verified) {
+                sub.append("Проверенный сервер от Пельмени VPN\n");
+            }
+            sub.append(entry.location.isEmpty() ? "Регион не указан" : "Регион: " + entry.location)
+                    .append("\n").append(entry.limitsLabel())
+                    .append("\nTLS: ").append(entry.tls ? "включён" : "нет")
+                    .append("\nSSH fingerprint: ").append(entry.fingerprint);
+            addCardSubtitle(card, sub.toString());
+
+            if (ownedProfile != null) {
+                ServerProfiles.Profile finalOwned = ownedProfile;
+                Button manage = new Button(this);
+                manage.setText("УПРАВЛЕНИЕ РАЗДАЧЕЙ");
+                LinearLayout.LayoutParams manageParams = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, dp(52));
+                manageParams.topMargin = dp(10);
+                card.addView(manage, manageParams);
+                manage.setOnClickListener(v -> showPublishedServerPage(finalOwned, entry));
+            } else {
+                Button connect = new Button(this);
+                connect.setText(alreadyAdded ? "ОБНОВИТЬ И ПОДКЛЮЧИТЬСЯ" : "ПОЛУЧИТЬ ЛИЧНЫЙ ДОСТУП");
+                LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, dp(52));
+                params.topMargin = dp(10);
+                card.addView(connect, params);
+                connect.setOnClickListener(v ->
+                        claimPublicServer(entry, connect));
+            }
             page.addView(card, pageCardParams());
+        }
+        if (!myAdminServers.isEmpty()) {
+            addSectionTitle(page, "Публикация");
+            addPageAction(page, "Опубликовать свой сервер",
+                    "Открыть безопасную раздачу для друзей или каталога",
+                    () -> {
+                        ServerProfiles.Profile target = peopleServer(store);
+                        if (target != null) showPublishServerPage(target);
+                    });
         }
         addPageAction(page, "Обновить каталог",
                 "Проверить новые серверы и свободные места",

@@ -1291,12 +1291,37 @@ public class MainActivity extends Activity {
     }
 
     private void addCardTitle(LinearLayout card, String title) {
+        addCardTitle(card, title, false);
+    }
+
+    private void addCardTitle(LinearLayout card, String title, boolean verified) {
+        if (!verified) {
+            TextView view = new TextView(this);
+            view.setText(title);
+            view.setTextColor(0xFFF3F4F6);
+            view.setTextSize(16);
+            view.setTypeface(null, android.graphics.Typeface.BOLD);
+            card.addView(view);
+            return;
+        }
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(android.view.Gravity.CENTER_VERTICAL);
+
         TextView view = new TextView(this);
         view.setText(title);
         view.setTextColor(0xFFF3F4F6);
         view.setTextSize(16);
         view.setTypeface(null, android.graphics.Typeface.BOLD);
-        card.addView(view);
+        header.addView(view);
+
+        ImageView badge = new ImageView(this);
+        badge.setImageResource(R.drawable.ic_verified_badge);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(18), dp(18));
+        params.leftMargin = dp(6);
+        header.addView(badge, params);
+
+        card.addView(header);
     }
 
     private void addCardSubtitle(LinearLayout card, String subtitle) {
@@ -2897,9 +2922,8 @@ public class MainActivity extends Activity {
                 }
             }
             LinearLayout card = createCard();
-            String title = entry.name + (entry.verified ? "  ✓" : "")
-                    + (ownedProfile != null ? "  (Ваш сервер)" : "");
-            addCardTitle(card, title);
+            String title = entry.name + (ownedProfile != null ? "  (Ваш сервер)" : "");
+            addCardTitle(card, title, entry.verified);
 
             StringBuilder sub = new StringBuilder();
             if (entry.verified) {

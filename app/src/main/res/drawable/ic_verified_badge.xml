@@ -1,0 +1,14 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="20dp"
+    android:height="20dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Stylized 12-point verified rosette in vibrant emerald green -->
+    <path
+        android:fillColor="#22C55E"
+        android:pathData="M12,1 L14.77,3.16 L18.23,2.77 L19.46,6.04 L22.61,7.57 L22.12,11.04 L23.83,14.07 L21.43,16.61 L21.26,20.09 L17.82,20.73 L15.75,23.51 L12.43,22.41 L9.11,23.51 L7.04,20.73 L3.6,20.09 L3.43,16.61 L1.03,14.07 L2.74,11.04 L2.25,7.57 L5.4,6.04 L6.63,2.77 L10.09,3.16 Z" />
+    <!-- Crisp bold white checkmark -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M9.86,16.17 L5.69,12.00 L7.10,10.59 L9.86,13.34 L16.90,6.30 L18.31,7.71 L9.86,16.17 Z" />
+</vector>

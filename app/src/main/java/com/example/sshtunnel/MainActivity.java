@@ -258,6 +258,10 @@ public class MainActivity extends Activity {
         });
         serverSelect.setOnClickListener(v -> showServerList());
         serverEdit.setOnClickListener(v -> {
+            if (isPublicModeActive()) {
+                showPublicLocationPicker();
+                return;
+            }
             ServerProfiles.Profile active =
                     ServerProfiles.active(new SecureStore(this));
             if (active == null) showAddServerChoice();
@@ -2454,9 +2458,189 @@ public class MainActivity extends Activity {
         }
     }
 
+    private boolean isPublicModeActive() {
+        SecureStore store = new SecureStore(this);
+        return "1".equals(store.getPlain("active_public_mode", "0"));
+    }
+
+    private void setPublicModeActive(boolean active) {
+        SecureStore store = new SecureStore(this);
+        store.putPlain("active_public_mode", active ? "1" : "0");
+        updateServerCard();
+    }
+
+    private String getSelectedPublicLocation() {
+        SecureStore store = new SecureStore(this);
+        String loc = store.getPlain("public_selected_location", "auto");
+        return (loc == null || loc.isEmpty()) ? "auto" : loc;
+    }
+
+    private String getSelectedPublicLocationLabel() {
+        String loc = getSelectedPublicLocation();
+        if ("auto".equals(loc)) {
+            return "⚡ Автовыбор (Лучший пинг)";
+        }
+        return loc;
+    }
+
+    private void showPublicLocationPicker() {
+        SecureStore store = new SecureStore(this);
+        LinearLayout page = createPageContent("Локации публичных серверов",
+                "Выбери страну для подключения. VPN автоматически подберёт лучший сервер.");
+
+        speedWorker.execute(() -> {
+            try {
+                List<PublicServerRegistry.Entry> entries = PublicServerRegistry.load();
+                List<String> locations = PublicServerRegistry.availableLocations(entries);
+                mainHandler.post(() -> {
+                    page.removeAllViews();
+                    addSectionTitle(page, "Выбор региона");
+
+                    String current = getSelectedPublicLocation();
+
+                    LinearLayout autoCard = createCard();
+                    addCardTitle(autoCard, "⚡ Автовыбор (Лучший пинг)" + ("auto".equals(current) ? "  ●" : ""));
+                    addCardSubtitle(autoCard, "Автоматически подключает самый быстрый проверенный сервер");
+                    autoCard.setClickable(true);
+                    autoCard.setFocusable(true);
+                    autoCard.setOnClickListener(v -> {
+                        store.putPlain("public_selected_location", "auto");
+                        setPublicModeActive(true);
+                        showHomePage();
+                        if (running) {
+                            stopTunnel();
+                            startTunnel();
+                        }
+                    });
+                    page.addView(autoCard, pageCardParams());
+
+                    addSectionTitle(page, "Доступные страны (" + locations.size() + ")");
+                    for (String loc : locations) {
+                        int count = 0;
+                        String flag = "🌐";
+                        for (PublicServerRegistry.Entry e : entries) {
+                            if (loc.equalsIgnoreCase(e.locationName())) {
+                                count++;
+                                flag = e.locationFlag();
+                            }
+                        }
+                        boolean isCurrent = loc.equalsIgnoreCase(current);
+                        LinearLayout locCard = createCard();
+                        addCardTitle(locCard, flag + "  " + loc + (isCurrent ? "  ●" : ""));
+                        addCardSubtitle(locCard, "Серверов в регионе: " + count);
+                        locCard.setClickable(true);
+                        locCard.setFocusable(true);
+                        String selectedLoc = loc;
+                        locCard.setOnClickListener(v -> {
+                            store.putPlain("public_selected_location", selectedLoc);
+                            setPublicModeActive(true);
+                            showHomePage();
+                            if (running) {
+                                stopTunnel();
+                                startTunnel();
+                            }
+                        });
+                        page.addView(locCard, pageCardParams());
+                    }
+                    showScrollablePage(page, navHome);
+                });
+            } catch (Exception error) {
+                mainHandler.post(() -> {
+                    Toast.makeText(this, "Не удалось загрузить локации: " + error.getMessage(), Toast.LENGTH_SHORT).show();
+                });
+            }
+        });
+        showScrollablePage(page, navHome);
+    }
+
+    private void startPublicTunnel() {
+        status.setText("Подбираю публичный сервер…");
+        speedWorker.execute(() -> {
+            try {
+                SecureStore store = new SecureStore(this);
+                List<PublicServerRegistry.Entry> entries = PublicServerRegistry.load();
+                String targetLoc = getSelectedPublicLocation();
+                List<PublicServerRegistry.Entry> candidates = new ArrayList<>();
+                for (PublicServerRegistry.Entry e : entries) {
+                    if (e.trustLevel == PublicServerRegistry.TrustLevel.SUSPICIOUS) continue;
+                    if ("auto".equals(targetLoc) || targetLoc.equalsIgnoreCase(e.locationName())) {
+                        candidates.add(e);
+                    }
+                }
+                if (candidates.isEmpty()) {
+                    for (PublicServerRegistry.Entry e : entries) {
+                        if (e.trustLevel != PublicServerRegistry.TrustLevel.SUSPICIOUS) {
+                            candidates.add(e);
+                        }
+                    }
+                }
+                if (candidates.isEmpty()) {
+                    throw new Exception("В каталоге нет доступных публичных серверов.");
+                }
+
+                List<ServerProfiles.Profile> profiles = ServerProfiles.list(store);
+                PublicServerRegistry.Entry bestEntry = candidates.get(0);
+                ServerProfiles.Profile matchedProfile = null;
+                for (PublicServerRegistry.Entry c : candidates) {
+                    for (ServerProfiles.Profile p : profiles) {
+                        if (p.host.equalsIgnoreCase(c.host)) {
+                            matchedProfile = p;
+                            bestEntry = c;
+                            break;
+                        }
+                    }
+                    if (matchedProfile != null) break;
+                }
+
+                if (matchedProfile == null) {
+                    PublicServerRegistry.Entry toClaim = bestEntry;
+                    mainHandler.post(() -> status.setText("Получаю доступ к " + toClaim.name + "…"));
+                    String code = PublicServerManager.claim(store, toClaim);
+                    ServerAccessCode.importCode(store, code);
+                    profiles = ServerProfiles.list(store);
+                    for (ServerProfiles.Profile p : profiles) {
+                        if (p.host.equalsIgnoreCase(toClaim.host)) {
+                            matchedProfile = p;
+                            break;
+                        }
+                    }
+                }
+
+                if (matchedProfile == null) {
+                    throw new Exception("Не удалось настроить публичный профиль.");
+                }
+
+                ServerProfiles.activate(store, matchedProfile.id);
+                ServerProfiles.Profile finalProfile = matchedProfile;
+                mainHandler.post(() -> {
+                    updateServerCard();
+                    ensureSshHostKey(finalProfile, () -> {
+                        if (maybeOfferTlsForCurrentServer(this::continueStartTunnel)) return;
+                        continueStartTunnel();
+                    });
+                });
+            } catch (Exception error) {
+                mainHandler.post(() -> {
+                    Toast.makeText(this, "Ошибка подключения: " + error.getMessage(), Toast.LENGTH_LONG).show();
+                    update("Отключено", false);
+                });
+            }
+        });
+    }
+
     private void updateServerCard() {
+        SecureStore store = new SecureStore(this);
+        if (isPublicModeActive()) {
+            serverName.setText("🌐 Публичные серверы");
+            serverAddress.setText("Локация: " + getSelectedPublicLocationLabel());
+            serverSelect.setText("СМЕНИТЬ");
+            serverEdit.setText("ЛОКАЦИЯ");
+            userLimitSummary.setVisibility(View.GONE);
+            userTrafficLimitPanel.setVisibility(View.GONE);
+            return;
+        }
         ServerProfiles.Profile active =
-                ServerProfiles.active(new SecureStore(this));
+                ServerProfiles.active(store);
         if (active == null) {
             serverName.setText("Сервер не добавлен");
             serverAddress.setText("Добавь первый сервер");
@@ -2572,6 +2756,25 @@ public class MainActivity extends Activity {
                 running
                         ? "При выборе другого сервера туннель переподключится автоматически."
                         : "Нажми на строку для выбора, на шестерёнку — для параметров.");
+
+        boolean isPublic = isPublicModeActive();
+        LinearLayout publicCard = createCard();
+        addCardTitle(publicCard, "🌐 Публичные серверы (Авто-выбор)" + (isPublic ? "  ●" : ""));
+        addCardSubtitle(publicCard, "Локация: " + getSelectedPublicLocationLabel()
+                + "\nАвтоматический подбор и переключение между серверами");
+        publicCard.setClickable(true);
+        publicCard.setFocusable(true);
+        publicCard.setOnClickListener(v -> {
+            setPublicModeActive(true);
+            showHomePage();
+            if (running) {
+                stopTunnel();
+                startTunnel();
+            }
+        });
+        page.addView(publicCard, pageCardParams());
+
+        addSectionTitle(page, "Ваши серверы и профили");
         if (active != null) {
             TextView currentName = new TextView(this);
             currentName.setText(active.name);
@@ -2607,6 +2810,7 @@ public class MainActivity extends Activity {
             row.setClickable(true);
             row.setFocusable(true);
             row.setOnClickListener(v -> {
+                setPublicModeActive(false);
                 switchToServer(profile);
             });
 
@@ -2891,9 +3095,11 @@ public class MainActivity extends Activity {
             page.addView(empty, pageCardParams());
         }
         SecureStore store = new SecureStore(this);
+        boolean showSuspicious = store.getBoolean("show_suspicious_public_servers", false);
+        List<PublicServerRegistry.Entry> visibleEntries = PublicServerRegistry.filter(entries, showSuspicious);
         List<ServerProfiles.Profile> myAdminServers = adminServers(store);
         List<ServerProfiles.Profile> allProfiles = ServerProfiles.list(store);
-        for (PublicServerRegistry.Entry entry : entries) {
+        for (PublicServerRegistry.Entry entry : visibleEntries) {
             ServerProfiles.Profile ownedProfile = null;
             for (ServerProfiles.Profile admin : myAdminServers) {
                 if (admin.host.equalsIgnoreCase(entry.host)) {
@@ -2913,10 +3119,16 @@ public class MainActivity extends Activity {
             addCardTitle(card, title, entry.verified);
 
             StringBuilder sub = new StringBuilder();
-            if (entry.verified) {
-                sub.append("Проверенный сервер от Пельмени VPN\n");
+            if (entry.trustLevel == PublicServerRegistry.TrustLevel.OFFICIAL) {
+                sub.append("🛡️ Официальный сервер Пельмени VPN\n");
+            } else if (entry.trustLevel == PublicServerRegistry.TrustLevel.VERIFIED) {
+                sub.append("✓ Подтверждённый публичный сервер\n");
+            } else if (entry.trustLevel == PublicServerRegistry.TrustLevel.SUSPICIOUS) {
+                sub.append("⚠ Подозрительный сервер (не проверен!)\n");
+            } else {
+                sub.append("🌐 Публичный сервер сообщества\n");
             }
-            sub.append(entry.location.isEmpty() ? "Регион не указан" : "Регион: " + entry.location)
+            sub.append(entry.location.isEmpty() ? "Регион не указан" : "Регион: " + entry.locationFlag() + " " + entry.location)
                     .append("\n").append(entry.limitsLabel())
                     .append("\nTLS: ").append(entry.tls ? "включён" : "нет")
                     .append("\nSSH fingerprint: ").append(entry.fingerprint);
@@ -2952,6 +3164,12 @@ public class MainActivity extends Activity {
                         if (target != null) showPublishServerPage(target);
                     });
         }
+        addToggleCard(page, "Показывать подозрительные серверы",
+                "Отображать серверы без проверки или с предупреждениями безопасности",
+                showSuspicious, checked -> {
+                    store.putBoolean("show_suspicious_public_servers", checked);
+                    showFreeServersPage(entries, null);
+                });
         addPageAction(page, "Обновить каталог",
                 "Проверить новые серверы и свободные места",
                 () -> showFreeServersPage(null, null));
@@ -3986,6 +4204,10 @@ public class MainActivity extends Activity {
     }
 
     private void startTunnel() {
+        if (isPublicModeActive()) {
+            startPublicTunnel();
+            return;
+        }
         if (ServerProfiles.active(new SecureStore(this)) == null) {
             showAddServerChoice();
             return;

@@ -12,7 +12,9 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 
 final class PublicServerRegistry {
     private static final String API =
@@ -21,6 +23,23 @@ final class PublicServerRegistry {
     private static final String ISSUE =
             "https://github.com/sonofstrange/pelmeni-vpn/issues/new";
     private static final String MARKER = "PELMENI_PUBLIC_V1:";
+
+    enum TrustLevel {
+        OFFICIAL("Официальный", "🛡️", 0xFF22C55E),
+        VERIFIED("Проверенный", "✓", 0xFF3B82F6),
+        COMMUNITY("Публичный", "🌐", 0xFF9CA3AF),
+        SUSPICIOUS("Подозрительный", "⚠", 0xFFEF4444);
+
+        final String label;
+        final String icon;
+        final int color;
+
+        TrustLevel(String label, String icon, int color) {
+            this.label = label;
+            this.icon = icon;
+            this.color = color;
+        }
+    }
 
     static final class Entry {
         final String poolId;
@@ -42,12 +61,17 @@ final class PublicServerRegistry {
         final String issueUrl;
         final boolean verified;
         final String author;
+        final TrustLevel trustLevel;
 
         Entry(JSONObject json, String issueUrl) throws Exception {
-            this(json, issueUrl, false, "");
+            this(json, issueUrl, TrustLevel.COMMUNITY, "");
         }
 
         Entry(JSONObject json, String issueUrl, boolean verified, String author) throws Exception {
+            this(json, issueUrl, verified ? TrustLevel.VERIFIED : TrustLevel.COMMUNITY, author);
+        }
+
+        Entry(JSONObject json, String issueUrl, TrustLevel trustLevel, String author) throws Exception {
             poolId = json.getString("pool_id");
             name = json.getString("name");
             location = json.optString("location", "");
@@ -65,13 +89,64 @@ final class PublicServerRegistry {
             maxUsers = json.optInt("max_users", 50);
             tls = json.optBoolean("tls", false);
             this.issueUrl = issueUrl == null ? "" : issueUrl;
-            this.verified = verified
-                    || json.optBoolean("verified", false)
-                    || json.optBoolean("official", false)
-                    || "sonofstrange".equalsIgnoreCase(author)
-                    || (name != null && (name.toLowerCase().contains("пельмен") || name.toLowerCase().contains("pelmeni")))
-                    || "31.76.110.227".equals(host);
             this.author = author == null ? "" : author;
+
+            if (trustLevel != null && trustLevel != TrustLevel.COMMUNITY) {
+                this.trustLevel = trustLevel;
+            } else {
+                String rawTrust = json.optString("trust_level", "");
+                if ("OFFICIAL".equalsIgnoreCase(rawTrust)
+                        || json.optBoolean("official", false)
+                        || "sonofstrange".equalsIgnoreCase(author)
+                        || (name != null && (name.toLowerCase(Locale.ROOT).contains("пельмен") || name.toLowerCase(Locale.ROOT).contains("pelmeni")))
+                        || "31.76.110.227".equals(host)) {
+                    this.trustLevel = TrustLevel.OFFICIAL;
+                } else if ("VERIFIED".equalsIgnoreCase(rawTrust) || json.optBoolean("verified", false)) {
+                    this.trustLevel = TrustLevel.VERIFIED;
+                } else if ("SUSPICIOUS".equalsIgnoreCase(rawTrust) || json.optBoolean("suspicious", false)) {
+                    this.trustLevel = TrustLevel.SUSPICIOUS;
+                } else {
+                    this.trustLevel = TrustLevel.COMMUNITY;
+                }
+            }
+            this.verified = this.trustLevel == TrustLevel.OFFICIAL || this.trustLevel == TrustLevel.VERIFIED;
+        }
+
+        String locationFlag() {
+            String loc = (location + " " + name).toLowerCase(Locale.ROOT);
+            if (loc.contains("нидерланд") || loc.contains("netherland") || loc.contains("amsterdam") || loc.contains("holland") || loc.contains("nl")) return "🇳🇱";
+            if (loc.contains("герман") || loc.contains("german") || loc.contains("frankfurt") || loc.contains("berlin") || loc.contains("de")) return "🇩🇪";
+            if (loc.contains("финлянд") || loc.contains("finland") || loc.contains("helsinki") || loc.contains("fi")) return "🇫🇮";
+            if (loc.contains("росси") || loc.contains("russia") || loc.contains("moscow") || loc.contains("saint") || loc.contains("ru")) return "🇷🇺";
+            if (loc.contains("сша") || loc.contains("usa") || loc.contains("america") || loc.contains("united states") || loc.contains("us")) return "🇺🇸";
+            if (loc.contains("великобритан") || loc.contains("uk") || loc.contains("england") || loc.contains("london") || loc.contains("gb")) return "🇬🇧";
+            if (loc.contains("франци") || loc.contains("france") || loc.contains("paris") || loc.contains("fr")) return "🇫🇷";
+            if (loc.contains("турци") || loc.contains("turkey") || loc.contains("istanbul") || loc.contains("tr")) return "🇹🇷";
+            if (loc.contains("казахстан") || loc.contains("kazakhstan") || loc.contains("almaty") || loc.contains("kz")) return "🇰🇿";
+            if (loc.contains("польш") || loc.contains("poland") || loc.contains("warsaw") || loc.contains("pl")) return "🇵🇱";
+            if (loc.contains("швеци") || loc.contains("sweden") || loc.contains("stockholm") || loc.contains("se")) return "🇸🇪";
+            if (loc.contains("япони") || loc.contains("japan") || loc.contains("tokyo") || loc.contains("jp")) return "🇯🇵";
+            if (loc.contains("сингапур") || loc.contains("singapore") || loc.contains("sg")) return "🇸🇬";
+            if (loc.contains("эстони") || loc.contains("estonia") || loc.contains("tallinn") || loc.contains("ee")) return "🇪🇪";
+            if (loc.contains("латви") || loc.contains("latvia") || loc.contains("riga") || loc.contains("lv")) return "🇱🇻";
+            if (loc.contains("литв") || loc.contains("lithuania") || loc.contains("vilnius") || loc.contains("lt")) return "🇱🇹";
+            return "🌐";
+        }
+
+        String locationName() {
+            if (location != null && !location.trim().isEmpty()) {
+                return location.trim();
+            }
+            String flag = locationFlag();
+            if ("🇳🇱".equals(flag)) return "Нидерланды";
+            if ("🇩🇪".equals(flag)) return "Германия";
+            if ("🇫🇮".equals(flag)) return "Финляндия";
+            if ("🇷🇺".equals(flag)) return "Россия";
+            if ("🇺🇸".equals(flag)) return "США";
+            if ("🇬🇧".equals(flag)) return "Великобритания";
+            if ("🇫🇷".equals(flag)) return "Франция";
+            if ("🇹🇷".equals(flag)) return "Турция";
+            return "Другие регионы";
         }
 
         JSONObject toJson() throws Exception {
@@ -84,7 +159,7 @@ final class PublicServerRegistry {
                     .put("ssh_port", sshPort)
                     .put("registrar_user", registrarUser)
                     .put("registrar_password", registrarPassword)
-                    .put("host_key_type", hostKeyType)
+                    .put("hostKeyType", hostKeyType)
                     .put("host_key", hostKey)
                     .put("fingerprint", fingerprint)
                     .put("days", days)
@@ -93,7 +168,8 @@ final class PublicServerRegistry {
                     .put("speed_mbps", speedMbps)
                     .put("max_users", maxUsers)
                     .put("tls", tls)
-                    .put("verified", verified);
+                    .put("verified", verified)
+                    .put("trust_level", trustLevel.name());
         }
 
         String limitsLabel() {
@@ -108,6 +184,28 @@ final class PublicServerRegistry {
         private static String limit(long value, String unit) {
             return value <= 0 ? "∞" : value + " " + unit;
         }
+    }
+
+    static List<Entry> filter(List<Entry> entries, boolean showSuspicious) {
+        if (entries == null) return Collections.emptyList();
+        List<Entry> filtered = new ArrayList<>();
+        for (Entry e : entries) {
+            if (!showSuspicious && e.trustLevel == TrustLevel.SUSPICIOUS) continue;
+            filtered.add(e);
+        }
+        return filtered;
+    }
+
+    static List<String> availableLocations(List<Entry> entries) {
+        if (entries == null) return Collections.emptyList();
+        List<String> locs = new ArrayList<>();
+        for (Entry e : entries) {
+            if (e.trustLevel == TrustLevel.SUSPICIOUS) continue;
+            String loc = e.locationName();
+            if (!locs.contains(loc)) locs.add(loc);
+        }
+        Collections.sort(locs);
+        return locs;
     }
 
     static List<Entry> load() throws Exception {
@@ -140,45 +238,51 @@ final class PublicServerRegistry {
                     JSONObject json = new JSONObject(
                             new String(decoded, StandardCharsets.UTF_8));
                     if (json.optInt("format", 0) == 1) {
-                        boolean verified = false;
                         String authorLogin = "";
                         JSONObject user = issue.optJSONObject("user");
                         if (user != null) {
                             authorLogin = user.optString("login", "");
                         }
                         String assoc = issue.optString("author_association", "");
+
+                        TrustLevel trustLevel = TrustLevel.COMMUNITY;
                         if ("OWNER".equalsIgnoreCase(assoc)
-                                || "MEMBER".equalsIgnoreCase(assoc)
-                                || "COLLABORATOR".equalsIgnoreCase(assoc)
-                                || "sonofstrange".equalsIgnoreCase(authorLogin)) {
-                            verified = true;
+                                || "sonofstrange".equalsIgnoreCase(authorLogin)
+                                || (json.optString("name","").toLowerCase(Locale.ROOT).contains("пельмен"))
+                                || "31.76.110.227".equals(json.optString("host",""))) {
+                            trustLevel = TrustLevel.OFFICIAL;
+                        } else if ("MEMBER".equalsIgnoreCase(assoc) || "COLLABORATOR".equalsIgnoreCase(assoc)) {
+                            trustLevel = TrustLevel.VERIFIED;
                         }
+
                         JSONArray labels = issue.optJSONArray("labels");
                         if (labels != null) {
                             for (int l = 0; l < labels.length(); l++) {
                                 JSONObject lbl = labels.optJSONObject(l);
                                 if (lbl != null) {
-                                    String lname = lbl.optString("name", "");
-                                    if ("verified".equalsIgnoreCase(lname)
-                                            || "official".equalsIgnoreCase(lname)
-                                            || "verified-server".equalsIgnoreCase(lname)
-                                            || "admin".equalsIgnoreCase(lname)) {
-                                        verified = true;
+                                    String lname = lbl.optString("name", "").toLowerCase(Locale.ROOT);
+                                    if (lname.contains("suspicious") || lname.contains("untrusted") || lname.contains("fake") || lname.contains("scam") || lname.contains("warning")) {
+                                        trustLevel = TrustLevel.SUSPICIOUS;
                                         break;
+                                    } else if (lname.contains("official") || lname.contains("пельмени") || lname.contains("pelmeni-team")) {
+                                        trustLevel = TrustLevel.OFFICIAL;
+                                    } else if (lname.contains("verified") || lname.contains("trusted")) {
+                                        if (trustLevel != TrustLevel.OFFICIAL) trustLevel = TrustLevel.VERIFIED;
                                     }
                                 }
                             }
                         }
+
                         result.add(new Entry(
-                                json, issue.optString("html_url", ""), verified, authorLogin));
+                                json, issue.optString("html_url", ""), trustLevel, authorLogin));
                     }
                 } catch (Exception ignored) {
                     // One malformed community entry must not hide valid servers.
                 }
             }
-            java.util.Collections.sort(result, (a, b) -> {
-                if (a.verified != b.verified) {
-                    return a.verified ? -1 : 1;
+            Collections.sort(result, (a, b) -> {
+                if (a.trustLevel != b.trustLevel) {
+                    return Integer.compare(a.trustLevel.ordinal(), b.trustLevel.ordinal());
                 }
                 return a.name.compareToIgnoreCase(b.name);
             });

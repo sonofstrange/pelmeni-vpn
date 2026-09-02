@@ -114,8 +114,12 @@ final class SocksProxy implements AutoCloseable {
         ChannelDirectTCPIP channel = null;
         try (Socket clientSocket = client) {
             client.setTcpNoDelay(true);
-            client.setReceiveBufferSize(512 * 1024);
-            client.setSendBufferSize(512 * 1024);
+            try {
+                client.setPerformancePreferences(0, 2, 1);
+                client.setTrafficClass(0x10);
+            } catch (Exception ignored) {}
+            client.setReceiveBufferSize(256 * 1024);
+            client.setSendBufferSize(256 * 1024);
             client.setSoTimeout(15_000);
             InputStream input = client.getInputStream();
             OutputStream output = client.getOutputStream();

@@ -75,6 +75,10 @@ final class LowLatencySocketFactory implements SocketFactory {
         socket.setTcpNoDelay(true);
         socket.setKeepAlive(true);
         try {
+            socket.setPerformancePreferences(0, 2, 1);
+        } catch (Exception ignored) {
+        }
+        try {
             socket.setTrafficClass(0x10); // IPTOS_LOWDELAY
         } catch (SocketException ignored) {
         }

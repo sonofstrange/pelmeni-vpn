@@ -40,8 +40,14 @@ final class PublicServerRegistry {
         final int maxUsers;
         final boolean tls;
         final String issueUrl;
+        final boolean verified;
+        final String author;
 
         Entry(JSONObject json, String issueUrl) throws Exception {
+            this(json, issueUrl, false, "");
+        }
+
+        Entry(JSONObject json, String issueUrl, boolean verified, String author) throws Exception {
             poolId = json.getString("pool_id");
             name = json.getString("name");
             location = json.optString("location", "");
@@ -59,6 +65,10 @@ final class PublicServerRegistry {
             maxUsers = json.optInt("max_users", 50);
             tls = json.optBoolean("tls", false);
             this.issueUrl = issueUrl == null ? "" : issueUrl;
+            this.verified = verified
+                    || json.optBoolean("verified", false)
+                    || json.optBoolean("official", false);
+            this.author = author == null ? "" : author;
         }
 
         JSONObject toJson() throws Exception {
@@ -79,7 +89,8 @@ final class PublicServerRegistry {
                     .put("monthly_mb", monthlyMb)
                     .put("speed_mbps", speedMbps)
                     .put("max_users", maxUsers)
-                    .put("tls", tls);
+                    .put("tls", tls)
+                    .put("verified", verified);
         }
 
         String limitsLabel() {
@@ -126,13 +137,48 @@ final class PublicServerRegistry {
                     JSONObject json = new JSONObject(
                             new String(decoded, StandardCharsets.UTF_8));
                     if (json.optInt("format", 0) == 1) {
+                        boolean verified = false;
+                        String authorLogin = "";
+                        JSONObject user = issue.optJSONObject("user");
+                        if (user != null) {
+                            authorLogin = user.optString("login", "");
+                        }
+                        String assoc = issue.optString("author_association", "");
+                        if ("OWNER".equalsIgnoreCase(assoc)
+                                || "MEMBER".equalsIgnoreCase(assoc)
+                                || "COLLABORATOR".equalsIgnoreCase(assoc)
+                                || "sonofstrange".equalsIgnoreCase(authorLogin)) {
+                            verified = true;
+                        }
+                        JSONArray labels = issue.optJSONArray("labels");
+                        if (labels != null) {
+                            for (int l = 0; l < labels.length(); l++) {
+                                JSONObject lbl = labels.optJSONObject(l);
+                                if (lbl != null) {
+                                    String lname = lbl.optString("name", "");
+                                    if ("verified".equalsIgnoreCase(lname)
+                                            || "official".equalsIgnoreCase(lname)
+                                            || "verified-server".equalsIgnoreCase(lname)
+                                            || "admin".equalsIgnoreCase(lname)) {
+                                        verified = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
                         result.add(new Entry(
-                                json, issue.optString("html_url", "")));
+                                json, issue.optString("html_url", ""), verified, authorLogin));
                     }
                 } catch (Exception ignored) {
                     // One malformed community entry must not hide valid servers.
                 }
             }
+            java.util.Collections.sort(result, (a, b) -> {
+                if (a.verified != b.verified) {
+                    return a.verified ? -1 : 1;
+                }
+                return a.name.compareToIgnoreCase(b.name);
+            });
             return result;
         } finally {
             connection.disconnect();

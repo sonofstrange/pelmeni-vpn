@@ -26,6 +26,7 @@ import android.text.Editable;
 import android.text.InputType;
 import android.text.TextWatcher;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
@@ -1195,10 +1196,7 @@ public class MainActivity extends Activity {
         void onChange(boolean checked);
     }
 
-    private LinearLayout createPageContent(String title, String subtitle) {
-        LinearLayout page = new LinearLayout(this);
-        page.setOrientation(LinearLayout.VERTICAL);
-        page.setPadding(dp(20), dp(18), dp(20), dp(28));
+    private void addPageHeader(LinearLayout page, String title, String subtitle) {
         TextView titleView = new TextView(this);
         titleView.setText(title);
         titleView.setTextColor(0xFFF5F6F7);
@@ -1211,10 +1209,20 @@ public class MainActivity extends Activity {
         subtitleView.setTextSize(14);
         subtitleView.setPadding(0, dp(5), 0, dp(10));
         page.addView(subtitleView);
+    }
+
+    private LinearLayout createPageContent(String title, String subtitle) {
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setPadding(dp(20), dp(18), dp(20), dp(28));
+        addPageHeader(page, title, subtitle);
         return page;
     }
 
     private void showScrollablePage(LinearLayout page, View selectedNav) {
+        if (page.getParent() instanceof ViewGroup) {
+            ((ViewGroup) page.getParent()).removeView(page);
+        }
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         scroll.setClipToPadding(false);
@@ -2485,8 +2493,14 @@ public class MainActivity extends Activity {
 
     private void showPublicLocationPicker() {
         SecureStore store = new SecureStore(this);
-        LinearLayout page = createPageContent("Локации публичных серверов",
-                "Выбери страну для подключения. VPN автоматически подберёт лучший сервер.");
+        LinearLayout page = createPageContent("Локации",
+                "Выбери страну для подключения или умный автовыбор.");
+
+        LinearLayout loading = createCard();
+        addCardTitle(loading, "Загружаю доступные регионы…");
+        addCardSubtitle(loading, "Получение актуального списка серверов из каталога.");
+        page.addView(loading, pageCardParams());
+        showScrollablePage(page, navHome);
 
         speedWorker.execute(() -> {
             try {
@@ -2494,7 +2508,7 @@ public class MainActivity extends Activity {
                 List<String> locations = PublicServerRegistry.availableLocations(entries);
                 mainHandler.post(() -> {
                     page.removeAllViews();
-                    addSectionTitle(page, "Выбор региона");
+                    addPageHeader(page, "Локации", "Выбери страну или авто-подбор с наименьшим пингом.");
 
                     String current = getSelectedPublicLocation();
 
@@ -2514,20 +2528,23 @@ public class MainActivity extends Activity {
                     });
                     page.addView(autoCard, pageCardParams());
 
-                    addSectionTitle(page, "Доступные страны (" + locations.size() + ")");
+                    addSectionTitle(page, "Доступные регионы (" + locations.size() + ")");
                     for (String loc : locations) {
                         int count = 0;
+                        int officialCount = 0;
                         String flag = "🌐";
                         for (PublicServerRegistry.Entry e : entries) {
                             if (loc.equalsIgnoreCase(e.locationName())) {
                                 count++;
+                                if (e.trustLevel == PublicServerRegistry.TrustLevel.OFFICIAL) officialCount++;
                                 flag = e.locationFlag();
                             }
                         }
                         boolean isCurrent = loc.equalsIgnoreCase(current);
                         LinearLayout locCard = createCard();
                         addCardTitle(locCard, flag + "  " + loc + (isCurrent ? "  ●" : ""));
-                        addCardSubtitle(locCard, "Серверов в регионе: " + count);
+                        String subInfo = "Серверов: " + count + (officialCount > 0 ? " · 🛡️ Официальный" : "");
+                        addCardSubtitle(locCard, subInfo);
                         locCard.setClickable(true);
                         locCard.setFocusable(true);
                         String selectedLoc = loc;
@@ -2542,15 +2559,18 @@ public class MainActivity extends Activity {
                         });
                         page.addView(locCard, pageCardParams());
                     }
-                    showScrollablePage(page, navHome);
                 });
             } catch (Exception error) {
                 mainHandler.post(() -> {
-                    Toast.makeText(this, "Не удалось загрузить локации: " + error.getMessage(), Toast.LENGTH_SHORT).show();
+                    page.removeAllViews();
+                    LinearLayout errCard = createCard();
+                    addCardTitle(errCard, "Не удалось загрузить регионы");
+                    addCardSubtitle(errCard, error.getMessage() == null ? "Ошибка сети" : error.getMessage());
+                    page.addView(errCard, pageCardParams());
+                    addPageAction(page, "Повторить", "Загрузить список регионов ещё раз", this::showPublicLocationPicker);
                 });
             }
         });
-        showScrollablePage(page, navHome);
     }
 
     private void startPublicTunnel() {

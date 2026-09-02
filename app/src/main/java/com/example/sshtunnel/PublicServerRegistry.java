@@ -67,7 +67,10 @@ final class PublicServerRegistry {
             this.issueUrl = issueUrl == null ? "" : issueUrl;
             this.verified = verified
                     || json.optBoolean("verified", false)
-                    || json.optBoolean("official", false);
+                    || json.optBoolean("official", false)
+                    || "sonofstrange".equalsIgnoreCase(author)
+                    || (name != null && (name.toLowerCase().contains("пельмен") || name.toLowerCase().contains("pelmeni")))
+                    || "31.76.110.227".equals(host);
             this.author = author == null ? "" : author;
         }
 

@@ -1307,6 +1307,10 @@ public class MainActivity extends Activity {
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams headerParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        header.setLayoutParams(headerParams);
 
         TextView view = new TextView(this);
         view.setText(title);
@@ -1317,7 +1321,7 @@ public class MainActivity extends Activity {
 
         ImageView badge = new ImageView(this);
         badge.setImageResource(R.drawable.ic_verified_badge);
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(18), dp(18));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(20), dp(20));
         params.leftMargin = dp(6);
         header.addView(badge, params);
 

@@ -2651,7 +2651,7 @@ public class MainActivity extends Activity {
     private void updateServerCard() {
         SecureStore store = new SecureStore(this);
         if (isPublicModeActive()) {
-            serverName.setText("🌐 Публичные серверы");
+            serverName.setText("🌐 Сеть Pelmeni Free");
             serverAddress.setText("Локация: " + getSelectedPublicLocationLabel());
             serverSelect.setText("СМЕНИТЬ");
             serverEdit.setText("ЛОКАЦИЯ");
@@ -2706,16 +2706,27 @@ public class MainActivity extends Activity {
         boolean notificationsBlocked = Build.VERSION.SDK_INT >= 33
                 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
                 != android.content.pm.PackageManager.PERMISSION_GRANTED;
-        String titlePrefix = isPublicModeActive() ? "Публичный доступ · " : "Ваш доступ · ";
-        userLimitSummary.setText(titlePrefix + expiry + "\n"
-                + daily + " · " + monthly + "\nСкорость: " + speed
-                + (policy.dailyMb > 0 ? "\nДневной сброс "
-                + limitResetCountdown(policy.issuedAt, false) : "")
-                + (policy.monthlyMb > 0 ? " · месячный "
-                + limitResetCountdown(policy.issuedAt, true) : "")
-                + (warning.isEmpty() ? "" : "\n⚠ " + warning)
-                + (notificationsBlocked
-                ? "\n⚠ Уведомления запрещены Android — нажми сюда, чтобы включить." : ""));
+        if (isPublicModeActive()) {
+            String locLabel = "auto".equals(getSelectedPublicLocation())
+                    ? "⚡ Автовыбор (Лучший пинг)" : getSelectedPublicLocation();
+            userLimitSummary.setText("Бесплатная сеть Pelmeni Free · " + locLabel
+                    + "\nАвтобалансировка · Бесшовное переключение"
+                    + (policy.dailyMb > 0 ? "\nДневной пул узла: " + policy.dailyMb + " МБ" : "")
+                    + (policy.speedMbps > 0 ? " · Скорость: " + policy.speedMbps + " Мбит/с" : " · Максимальная скорость")
+                    + (warning.isEmpty() ? "" : "\n⚠ " + warning)
+                    + (notificationsBlocked
+                    ? "\n⚠ Уведомления запрещены Android — нажми сюда, чтобы включить." : ""));
+        } else {
+            userLimitSummary.setText("Ваш доступ · " + expiry + "\n"
+                    + daily + " · " + monthly + "\nСкорость: " + speed
+                    + (policy.dailyMb > 0 ? "\nДневной сброс "
+                    + limitResetCountdown(policy.issuedAt, false) : "")
+                    + (policy.monthlyMb > 0 ? " · месячный "
+                    + limitResetCountdown(policy.issuedAt, true) : "")
+                    + (warning.isEmpty() ? "" : "\n⚠ " + warning)
+                    + (notificationsBlocked
+                    ? "\n⚠ Уведомления запрещены Android — нажми сюда, чтобы включить." : ""));
+        }
         userLimitSummary.setOnClickListener(notificationsBlocked ? v -> {
             Intent settings = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
                     .putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName());

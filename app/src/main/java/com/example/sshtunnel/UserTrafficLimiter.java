@@ -12,7 +12,9 @@ final class UserTrafficLimiter {
     private long dayPeriod = -1;
     private long monthPeriod = -1;
     private long resetAt = -1;
-    private long nextAvailableNanos;
+    private double availableTokens;
+    private long lastTokenNanos;
+    private double maxBurstTokens;
 
     synchronized void refresh(
             UserAccessPolicy.Policy policy, UserAccessPolicy.Usage usage) {
@@ -23,6 +25,10 @@ final class UserTrafficLimiter {
                 ? Long.MAX_VALUE / 8L
                 : policy.speedMbps * 1_000_000L / 8L;
         issuedAt = policy.issuedAt;
+        maxBurstTokens = bytesPerSecond > 0 ? Math.max(512 * 1024.0, bytesPerSecond * 0.5) : 0;
+        availableTokens = maxBurstTokens;
+        lastTokenNanos = System.nanoTime();
+
         boolean manuallyReset = resetAt >= 0 && resetAt != usage.resetAt;
         if (dayPeriod != usage.dayPeriod || manuallyReset) {
             dayUsed = usage.dayBytes;
@@ -37,7 +43,6 @@ final class UserTrafficLimiter {
         dayPeriod = usage.dayPeriod;
         monthPeriod = usage.monthPeriod;
         resetAt = usage.resetAt;
-        nextAvailableNanos = System.nanoTime();
     }
 
     int acquire(int requested) throws InterruptedException {
@@ -61,13 +66,17 @@ final class UserTrafficLimiter {
             allowed = Math.min(requested, withOverage);
             if (bytesPerSecond > 0) {
                 long now = System.nanoTime();
-                long start = Math.max(now, nextAvailableNanos);
-                long duration = Math.max(1,
-                        (allowed * 1_000_000_000L + bytesPerSecond - 1) / bytesPerSecond);
-                nextAvailableNanos = start + duration;
-                long wait = start - now;
-                if (wait > 0) {
-                    waitNanos = wait;
+                double elapsedSec = Math.max(0, (now - lastTokenNanos) / 1_000_000_000.0);
+                lastTokenNanos = now;
+                availableTokens = Math.min(maxBurstTokens, availableTokens + elapsedSec * bytesPerSecond);
+                if (availableTokens >= allowed) {
+                    availableTokens -= allowed;
+                } else {
+                    double deficit = allowed - availableTokens;
+                    availableTokens = 0;
+                    double waitSec = deficit / bytesPerSecond;
+                    // Cap max wait per block to 15ms to prevent TCP queue buildup and bufferbloat spikes
+                    waitNanos = (long) Math.min(15_000_000L, waitSec * 1_000_000_000L);
                 }
             }
             dayUsed += allowed;

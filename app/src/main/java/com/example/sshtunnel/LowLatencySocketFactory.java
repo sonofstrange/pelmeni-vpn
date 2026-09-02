@@ -78,7 +78,7 @@ final class LowLatencySocketFactory implements SocketFactory {
             socket.setTrafficClass(0x10); // IPTOS_LOWDELAY
         } catch (SocketException ignored) {
         }
-        socket.setReceiveBufferSize(socketBufferBytes);
+        socket.setReceiveBufferSize(Math.max(2 * 1024 * 1024, socketBufferBytes));
         socket.setSendBufferSize(Math.max(4 * 1024 * 1024, socketBufferBytes));
     }
 

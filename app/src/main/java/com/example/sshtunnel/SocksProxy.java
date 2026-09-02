@@ -153,7 +153,7 @@ final class SocksProxy implements AutoCloseable {
             channel.setPort(targetPort);
             channel.setOrgIPAddress("127.0.0.1");
             channel.setOrgPort(client.getLocalPort());
-            ChannelTuning.optimizeDirectTcpIp(channel, Math.max(windowSize, 2 * 1024 * 1024), Math.max(packetSize, 32 * 1024));
+            ChannelTuning.optimizeDirectTcpIp(channel, windowSize, packetSize);
             OutputStream channelOutput = channel.getOutputStream();
             InputStream channelInput = channel.getInputStream();
             long connectStarted = SystemClock.elapsedRealtime();
@@ -187,19 +187,19 @@ final class SocksProxy implements AutoCloseable {
 
     private void copy(InputStream input, OutputStream output, AtomicLong counter) {
         try {
-            byte[] buffer = new byte[64 * 1024];
-            for (int count; (count = input.read(buffer)) != -1;) {
+            byte[] buffer = new byte[NetworkTuning.STREAM_BUFFER_BYTES];
+            for (int count; (count = readAvailable(input, buffer)) != -1;) {
                 int allowed = trafficLimiter == null
                         ? count : trafficLimiter.acquire(count);
                 if (allowed <= 0) return;
                 output.write(buffer, 0, allowed);
-                output.flush();
+                if (input.available() <= 0) {
+                    output.flush();
+                }
                 counter.addAndGet(allowed);
                 if (allowed < count) return;
             }
             output.flush();
-        } catch (InterruptedException ignored) {
-            Thread.currentThread().interrupt();
         } catch (IOException ignored) {
         }
     }

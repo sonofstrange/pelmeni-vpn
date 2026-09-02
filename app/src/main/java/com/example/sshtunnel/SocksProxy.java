@@ -193,6 +193,7 @@ final class SocksProxy implements AutoCloseable {
                         ? count : trafficLimiter.acquire(count);
                 if (allowed <= 0) return;
                 output.write(buffer, 0, allowed);
+                output.flush();
                 counter.addAndGet(allowed);
                 if (allowed < count) return;
             }

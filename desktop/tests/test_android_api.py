@@ -155,9 +155,9 @@ class AndroidApiCompatibilityTests(unittest.TestCase):
         self.assertIn("height: 66", qml)
         self.assertIn("font.pixelSize: 28", qml)
         self.assertIn("width: peopleScroll.availableWidth - 40", qml)
-    def test_desktop_version_is_1_39_beta1(self) -> None:
+    def test_desktop_version_is_1_39(self) -> None:
         from pelmeni_desktop.version import APP_VERSION
-        self.assertEqual(APP_VERSION, "1.39-beta1")
+        self.assertEqual(APP_VERSION, "1.39")
 
     def test_default_window_kib_is_640(self) -> None:
         from pelmeni_desktop.profile_store import DEFAULT_WINDOW_KIB, _normalize

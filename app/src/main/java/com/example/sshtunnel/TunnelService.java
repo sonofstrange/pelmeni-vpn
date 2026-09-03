@@ -151,16 +151,8 @@ public class TunnelService extends Service {
             }
         };
         try {
-            NetworkRequest request = new NetworkRequest.Builder()
-                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                    .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
-                    .build();
-            connectivityManager.registerNetworkCallback(request, networkCallback);
-        } catch (Exception fallback) {
-            try {
-                connectivityManager.registerDefaultNetworkCallback(networkCallback);
-            } catch (Exception ignored) {
-            }
+            connectivityManager.registerDefaultNetworkCallback(networkCallback);
+        } catch (Exception ignored) {
         }
     }
 
@@ -179,8 +171,6 @@ public class TunnelService extends Service {
                 notSuspended);
         if (usable) {
             stageUnderlyingNetwork(network);
-        } else {
-            discardUnderlyingNetwork(network);
         }
     }
 
@@ -222,9 +212,9 @@ public class TunnelService extends Service {
         LowLatencySocketFactory.clearDnsCache();
         TlsTransport.clearDnsCache();
         QuickSettingsTileService.requestUpdate(this);
-        if (handoff || wasDisconnected) {
+        if (handoff && !wasDisconnected) {
             requestReconnect(
-                    "Сеть стабилизировалась, обновляем VPN-соединение…");
+                    "Сеть сменилась, обновляем VPN-соединение…");
         }
         updateVpnUnderlyingNetwork(network);
     }
@@ -246,7 +236,7 @@ public class TunnelService extends Service {
                 notifyAll();
             }
         }
-        if (activeLost) {
+        if (activeLost && connected) {
             requestReconnect("Сеть потеряна, ожидаем новый маршрут…");
             updateVpnUnderlyingNetwork(null);
         }
@@ -256,21 +246,34 @@ public class TunnelService extends Service {
         long deadline = SystemClock.elapsedRealtime() + timeoutMs;
         synchronized (this) {
             if (activeUnderlyingNetwork == null && connectivityManager != null) {
-                Network[] all = null;
-                try {
-                    all = connectivityManager.getAllNetworks();
-                } catch (Exception ignored) {
+                Network active = connectivityManager.getActiveNetwork();
+                if (active != null) {
+                    NetworkCapabilities caps = connectivityManager.getNetworkCapabilities(active);
+                    if (caps != null && UnderlyingNetworkPolicy.usable(
+                            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET),
+                            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED),
+                            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN),
+                            Build.VERSION.SDK_INT < 28 || caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED))) {
+                        activeUnderlyingNetwork = active;
+                    }
                 }
-                if (all != null) {
-                    for (Network net : all) {
-                        NetworkCapabilities caps = connectivityManager.getNetworkCapabilities(net);
-                        if (caps != null && UnderlyingNetworkPolicy.usable(
-                                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET),
-                                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED),
-                                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN),
-                                Build.VERSION.SDK_INT < 28 || caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED))) {
-                            activeUnderlyingNetwork = net;
-                            break;
+                if (activeUnderlyingNetwork == null) {
+                    Network[] all = null;
+                    try {
+                        all = connectivityManager.getAllNetworks();
+                    } catch (Exception ignored) {
+                    }
+                    if (all != null) {
+                        for (Network net : all) {
+                            NetworkCapabilities caps = connectivityManager.getNetworkCapabilities(net);
+                            if (caps != null && UnderlyingNetworkPolicy.usable(
+                                    caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET),
+                                    caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED),
+                                    caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN),
+                                    Build.VERSION.SDK_INT < 28 || caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED))) {
+                                activeUnderlyingNetwork = net;
+                                break;
+                            }
                         }
                     }
                 }
@@ -279,7 +282,14 @@ public class TunnelService extends Service {
                 send("Ожидание сети Wi-Fi или сотовой связи…");
                 long remaining = deadline - SystemClock.elapsedRealtime();
                 if (remaining <= 0) break;
-                wait(remaining);
+                wait(Math.min(remaining, 500));
+                if (activeUnderlyingNetwork == null && connectivityManager != null) {
+                    Network active = connectivityManager.getActiveNetwork();
+                    if (active != null) {
+                        activeUnderlyingNetwork = active;
+                        break;
+                    }
+                }
             }
             return activeUnderlyingNetwork;
         }
@@ -411,23 +421,34 @@ public class TunnelService extends Service {
         SocksProxy newTelegramProxy = null;
         SocksProxy newVpnProxy = null;
         UserTrafficLimiter newTrafficLimiter = null;
-        int poolCount = vpnEnabled ? 3 : 1;
-        ExecutorService connectPool = Executors.newFixedThreadPool(poolCount);
-        List<Future<Session>> futures = new ArrayList<>();
-
-        for (int i = 0; i < poolCount; i++) {
-            futures.add(connectPool.submit(() -> connectSession(
-                    store, host, user, password, sshPort, tlsProtected,
-                    windowSize, underlyingNetwork)));
-        }
-        connectPool.shutdown();
 
         List<Session> established = new ArrayList<>();
         try {
-            for (Future<Session> f : futures) {
-                established.add(f.get(25_000, TimeUnit.MILLISECONDS));
+            newSession = connectSession(
+                    store, host, user, password, sshPort, tlsProtected,
+                    windowSize, underlyingNetwork);
+            established.add(newSession);
+
+            if (vpnEnabled) {
+                ExecutorService poolService = Executors.newFixedThreadPool(2);
+                List<Future<Session>> poolFutures = new ArrayList<>();
+                for (int i = 0; i < 2; i++) {
+                    poolFutures.add(poolService.submit(() -> connectSession(
+                            store, host, user, password, sshPort, tlsProtected,
+                            windowSize, underlyingNetwork)));
+                }
+                poolService.shutdown();
+                for (Future<Session> f : poolFutures) {
+                    try {
+                        Session s = f.get(2_500, TimeUnit.MILLISECONDS);
+                        if (s != null && s.isConnected()) {
+                            established.add(s);
+                        }
+                    } catch (Exception ignored) {
+                        f.cancel(true);
+                    }
+                }
             }
-            newSession = established.get(0);
             newTrafficLimiter = createTrafficLimiter(store);
             if (telegramEnabled) {
                 newTelegramProxy = new SocksProxy(
@@ -456,7 +477,6 @@ public class TunnelService extends Service {
             final Session policySession = newSession;
             statsWorker.execute(() -> syncUserPolicy(policySession));
         } catch (Exception error) {
-            for (Future<Session> f : futures) f.cancel(true);
             if (newTelegramProxy != null) newTelegramProxy.close();
             if (newVpnProxy != null) newVpnProxy.close();
             for (Session s : established) {
@@ -617,15 +637,17 @@ public class TunnelService extends Service {
         while (wanted && !forceReconnect) {
             Session current = session;
             Session[] currentVpn = vpnSessions;
-            if (current == null || !current.isConnected()) {
-                throw new Exception("session disconnected");
-            }
-            if (currentVpn != null) {
+            boolean anyAlive = current != null && current.isConnected();
+            if (!anyAlive && currentVpn != null) {
                 for (Session s : currentVpn) {
-                    if (s != null && !s.isConnected()) {
-                        throw new Exception("VPN session disconnected");
+                    if (s != null && s.isConnected()) {
+                        anyAlive = true;
+                        break;
                     }
                 }
+            }
+            if (!anyAlive) {
+                throw new Exception("session disconnected");
             }
             SocksProxy telegramProxy = telegramSocksProxy;
             SocksProxy vpnProxy = vpnSocksProxy;

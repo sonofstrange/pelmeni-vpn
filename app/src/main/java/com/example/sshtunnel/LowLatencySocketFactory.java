@@ -61,8 +61,16 @@ final class LowLatencySocketFactory implements SocketFactory {
                         ? java.net.InetAddress.getByName(host) : network.getByName(host);
                 DNS_CACHE.put(host, new DnsEntry(ip));
             } catch (IOException dnsError) {
-                if (cached != null) ip = cached.address;
-                else throw dnsError;
+                if (cached != null) {
+                    ip = cached.address;
+                } else {
+                    try {
+                        ip = java.net.InetAddress.getByName(host);
+                        DNS_CACHE.put(host, new DnsEntry(ip));
+                    } catch (IOException fallbackError) {
+                        throw dnsError;
+                    }
+                }
             }
         }
         InetSocketAddress address = new InetSocketAddress(ip, port);

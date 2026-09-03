@@ -115,8 +115,7 @@ public class VpnTunnelService extends VpnService {
         underlyingNetwork = network;
         underlyingUnavailable = network == null;
         if (tun != null) {
-            setUnderlyingNetworks(network == null
-                    ? new Network[0] : new Network[] {network});
+            setUnderlyingNetworks(network == null ? null : new Network[] {network});
         }
     }
 
@@ -206,8 +205,8 @@ public class VpnTunnelService extends VpnService {
             if (currentUnderlying != null) {
                 builder.setUnderlyingNetworks(
                         new Network[] {currentUnderlying});
-            } else if (underlyingUnavailable) {
-                builder.setUnderlyingNetworks(new Network[0]);
+            } else {
+                builder.setUnderlyingNetworks(null);
             }
             routing.apply(builder);
             AppSplitTunnel.apply(

@@ -271,9 +271,10 @@ $bin = '{bin_path}'
 $svc = Get-Service -Name $name -ErrorAction SilentlyContinue
 if ($null -ne $svc) {{
     Stop-Service -Name $name -Force -ErrorAction SilentlyContinue
-    & cmd.exe /c "sc.exe config $name binPath= \"$bin\" start= auto DisplayName= \"{SERVICE_DISPLAY_NAME}\""
+    Set-Service -Name $name -StartupType Automatic -DisplayName "{SERVICE_DISPLAY_NAME}" -Description "{SERVICE_DESCRIPTION}" -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path "HKLM:\\System\\CurrentControlSet\\Services\\$name" -Name ImagePath -Value $bin -ErrorAction SilentlyContinue
 }} else {{
-    New-Service -Name $name -BinaryPathName $bin -StartupType Automatic -DisplayName "{SERVICE_DISPLAY_NAME}" -Description "{SERVICE_DESCRIPTION}"
+    New-Service -Name $name -BinaryPathName $bin -StartupType Automatic -DisplayName "{SERVICE_DISPLAY_NAME}" -Description "{SERVICE_DESCRIPTION}" -ErrorAction SilentlyContinue
 }}
 Start-Service -Name $name -ErrorAction SilentlyContinue
 '''

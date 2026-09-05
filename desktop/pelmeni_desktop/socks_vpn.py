@@ -38,7 +38,7 @@ _DNS_CACHE_LOCK = threading.Lock()
 _DNS_CACHE_TTL = 45.0
 
 
-def _dns_over_ssh(transport: Any, payload: bytes) -> bytes:
+def _dns_over_ssh(transport: Any, payload: bytes, dns_host: str = "1.1.1.1") -> bytes:
     """Resolve a DNS wire query through an IPv4 TCP channel inside SSH with TTL caching."""
     if not payload or len(payload) > 65535:
         raise ValueError("Некорректный DNS-запрос")
@@ -55,22 +55,38 @@ def _dns_over_ssh(transport: Any, payload: bytes) -> bytes:
             else:
                 _DNS_CACHE.pop(query_key, None)
 
-    channel = transport.open_channel(
-        "direct-tcpip", ("1.1.1.1", 53), ("127.0.0.1", 0), timeout=8
-    )
-    if channel is None:
-        raise ConnectionError("SSH-сервер отклонил DNS-канал")
-    try:
-        channel.sendall(struct.pack("!H", len(payload)) + payload)
-        size = struct.unpack("!H", _recv_channel_exact(channel, 2))[0]
-        answer = _recv_channel_exact(channel, size)
-        with _DNS_CACHE_LOCK:
-            if len(_DNS_CACHE) > 512:
-                _DNS_CACHE.clear()
-            _DNS_CACHE[query_key] = (now, answer)
-        return answer
-    finally:
-        channel.close()
+    candidates = [dns_host]
+    for fallback in ("1.1.1.1", "8.8.8.8", "1.0.0.1"):
+        if fallback not in candidates:
+            candidates.append(fallback)
+
+    last_error: Exception | None = None
+    for target_host in candidates:
+        channel = None
+        try:
+            channel = transport.open_channel(
+                "direct-tcpip", (target_host, 53), ("127.0.0.1", 0), timeout=8
+            )
+            if channel is None:
+                continue
+            channel.sendall(struct.pack("!H", len(payload)) + payload)
+            size = struct.unpack("!H", _recv_channel_exact(channel, 2))[0]
+            answer = _recv_channel_exact(channel, size)
+            with _DNS_CACHE_LOCK:
+                if len(_DNS_CACHE) > 1024:
+                    _DNS_CACHE.clear()
+                _DNS_CACHE[query_key] = (now, answer)
+            return answer
+        except Exception as err:
+            last_error = err
+        finally:
+            if channel is not None:
+                try:
+                    channel.close()
+                except Exception:
+                    pass
+
+    raise ConnectionError(f"DNS-запрос через SSH не удался: {last_error}")
 
 
 def _parse_udp_packet(packet: bytes) -> tuple[tuple[str, int], bytes, bytes]:
@@ -274,9 +290,8 @@ class _Handler(socketserver.BaseRequestHandler):
                     channel.sendall(data)
                     self.server.add_traffic(uploaded=len(data))
             except Exception:
-                pass
-            finally:
                 stop_event.set()
+            finally:
                 try:
                     channel.shutdown_write()
                 except Exception:
@@ -291,9 +306,8 @@ class _Handler(socketserver.BaseRequestHandler):
                     client_sock.sendall(data)
                     self.server.add_traffic(downloaded=len(data))
             except Exception:
-                pass
-            finally:
                 stop_event.set()
+            finally:
                 try:
                     client_sock.shutdown(socket.SHUT_WR)
                 except Exception:
@@ -302,7 +316,7 @@ class _Handler(socketserver.BaseRequestHandler):
         up_thread = threading.Thread(target=copy_up, daemon=True)
         up_thread.start()
         copy_down()
-        up_thread.join(timeout=1.0)
+        up_thread.join(timeout=2.0)
 
     def _relay_udp(self) -> None:
         udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -339,8 +353,9 @@ class _Handler(socketserver.BaseRequestHandler):
                 # Other UDP (notably QUIC) is dropped so applications use TCP.
                 if target[1] != 53 or not payload or len(payload) > 65535:
                     continue
+                dns_target = target[0] if target[0] and target[0] != "0.0.0.0" else "1.1.1.1"
                 try:
-                    answer = _dns_over_ssh(self.server.transport, payload)
+                    answer = _dns_over_ssh(self.server.transport, payload, dns_host=dns_target)
                     udp.sendto(response_header + answer, source)
                     self.server.add_traffic(
                         uploaded=len(packet), downloaded=len(response_header) + len(answer)

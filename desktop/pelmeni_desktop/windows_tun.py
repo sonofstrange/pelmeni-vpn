@@ -18,6 +18,7 @@ from .storage import APP_DIR
 
 TUN_NAME = "PelmeniVPN"
 TUN_ADDRESS = "10.33.0.2"
+TUN_GATEWAY = "10.33.0.1"
 TUN_MASK = "255.255.255.0"
 DNS_SERVERS = ("1.1.1.1", "1.0.0.1")
 FULL_TUNNEL_ROUTES = (
@@ -225,11 +226,11 @@ class WindowsTunManager:
         self._run([
             "netsh.exe", "interface", "ipv4", "set", "address",
             f"name={TUN_NAME}", "source=static", f"address={TUN_ADDRESS}",
-            f"mask={TUN_MASK}", "gateway=none",
+            f"mask={TUN_MASK}", f"gateway={TUN_GATEWAY}", "store=active",
         ])
         self._run([
             "netsh.exe", "interface", "ipv4", "set", "interface",
-            f"interface={TUN_NAME}", "metric=5",
+            f"interface={TUN_NAME}", "metric=1",
         ])
         self._run([
             "netsh.exe", "interface", "ipv4", "set", "dnsservers",
@@ -302,7 +303,7 @@ class WindowsTunManager:
                 routes.append({
                     "family": 4,
                     "prefix": str(ipaddress.IPv4Network(prefix, strict=False)),
-                    "gateway": TUN_ADDRESS,
+                    "gateway": TUN_GATEWAY,
                     "interface_index": tun_index,
                     "kind": "tun",
                 })

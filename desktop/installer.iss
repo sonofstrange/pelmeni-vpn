@@ -1,7 +1,7 @@
 #define MyAppName "Пельмени VPN Desktop"
-#define MyAppVersion "1.39.0"
+#define MyAppVersion "1.40.0"
 #define MyAppExeName "PelmeniVPN-Desktop.exe"
-#define MySetupName "PelmeniVPN-Windows-Setup-1.39-beta1"
+#define MySetupName "PelmeniVPN-Windows-Setup-1.40-beta1"
 
 [Setup]
 AppId={{A3E26D86-3C0A-41EA-95D6-CE7D1BE54192}
@@ -28,11 +28,11 @@ CloseApplications=yes
 RestartApplications=no
 UsePreviousAppDir=yes
 UsePreviousTasks=yes
-VersionInfoVersion=1.39.0.0
+VersionInfoVersion=1.40.0.0
 VersionInfoCompany=Pelmeni VPN
 VersionInfoDescription=Pelmeni VPN Desktop Setup
 VersionInfoProductName=Pelmeni VPN Desktop
-VersionInfoProductVersion=1.39.0.0
+VersionInfoProductVersion=1.40.0.0
 
 [Languages]
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"

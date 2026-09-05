@@ -17,7 +17,7 @@ try {
         --onefile `
         --windowed `
         --distpath "$ReleaseDir" `
-        --name "PelmeniVPN-Windows-Setup-1.39-beta1" `
+        --name "PelmeniVPN-Windows-Setup-1.40-beta1" `
         --icon "assets\pelmeni_icon.ico" `
         --version-file "installer-version-info-qt.txt" `
         --add-data "assets\pelmeni_icon.png;assets" `
@@ -30,7 +30,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Installer build failed" }
 
     $RootDir = Join-Path $ProjectDir ".."
-    Copy-Item (Join-Path $ReleaseDir "PelmeniVPN-Windows-Setup-1.39-beta1.exe") (Join-Path $RootDir "PelmeniVPN-Windows-Setup-1.39-beta1.exe") -Force
+    Copy-Item (Join-Path $ReleaseDir "PelmeniVPN-Windows-Setup-1.40-beta1.exe") (Join-Path $RootDir "PelmeniVPN-Windows-Setup-1.40-beta1.exe") -Force
 } finally {
     Pop-Location
 }

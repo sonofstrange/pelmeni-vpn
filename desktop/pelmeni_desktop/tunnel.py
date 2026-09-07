@@ -85,6 +85,7 @@ def _connect_socket(host: str, port: int, timeout: float = 8) -> socket.socket:
                     struct.pack("!I", interface_index),
                 )
             raw.connect(target)
+            raw.settimeout(None)
             return raw
         except Exception as error:
             last_error = error
@@ -159,7 +160,9 @@ def _tls_socket(profile: dict[str, Any]) -> ssl.SSLSocket:
         try:
             raw = _connect_socket(host, port, timeout=8)
             try:
-                return context.wrap_socket(raw, server_hostname=host)
+                wrapped = context.wrap_socket(raw, server_hostname=host)
+                wrapped.settimeout(None)
+                return wrapped
             except (ssl.SSLCertVerificationError, ssl.SSLError) as cert_err:
                 # If strict X509 key usage verification fails on custom/stunnel self-signed CAs,
                 # fall back to client-authenticated TLS matching Android's permissive trust manager
@@ -186,7 +189,9 @@ def _tls_socket(profile: dict[str, Any]) -> ssl.SSLSocket:
                                 os.unlink(tmp_f)
                             except OSError:
                                 pass
-                return fallback_context.wrap_socket(raw, server_hostname=host)
+                wrapped = fallback_context.wrap_socket(raw, server_hostname=host)
+                wrapped.settimeout(None)
+                return wrapped
         except Exception as error:
             last_error = error
             if raw is not None:
@@ -215,6 +220,7 @@ class TunnelManager:
         telegram_port = int(profile["socks_port"])
         started = time.perf_counter()
         connection_socket = _tls_socket(profile) if profile.get("tls_enabled") else _connect_socket(host, port)
+        connection_socket.settimeout(None)
         self.latency_ms = max(1, round((time.perf_counter() - started) * 1000))
 
         APP_DIR.mkdir(parents=True, exist_ok=True)

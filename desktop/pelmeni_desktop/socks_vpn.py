@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import concurrent.futures
 import ipaddress
 import select
 import socket
@@ -35,7 +36,7 @@ def _recv_channel_exact(channel: Any, size: int) -> bytes:
 
 _DNS_CACHE: dict[bytes, tuple[float, bytes]] = {}
 _DNS_CACHE_LOCK = threading.Lock()
-_DNS_CACHE_TTL = 45.0
+_DNS_CACHE_TTL = 180.0
 
 
 def _dns_over_ssh(transport: Any, payload: bytes, dns_host: str = "1.1.1.1") -> bytes:
@@ -321,6 +322,7 @@ class _Handler(socketserver.BaseRequestHandler):
     def _relay_udp(self) -> None:
         udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         udp.bind(("127.0.0.1", 0))
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=8, thread_name_prefix="pelmeni-dns")
         try:
             self.request.sendall(
                 b"\x05\x00\x00\x01"
@@ -329,6 +331,26 @@ class _Handler(socketserver.BaseRequestHandler):
             )
             self.request.settimeout(None)
             udp.settimeout(0.5)
+
+            def handle_dns(
+                packet_data: bytes,
+                client_source: tuple[str, int],
+                dns_target: str,
+                dns_payload: bytes,
+                resp_hdr: bytes,
+            ) -> None:
+                if not self.server.transport.is_active():
+                    return
+                try:
+                    answer = _dns_over_ssh(self.server.transport, dns_payload, dns_host=dns_target)
+                    udp.sendto(resp_hdr + answer, client_source)
+                    self.server.add_traffic(
+                        uploaded=len(packet_data), downloaded=len(resp_hdr) + len(answer)
+                    )
+                except Exception as error:
+                    if self.server.transport.is_active():
+                        _log_error(error)
+
             while self.server.transport.is_active():
                 try:
                     packet, source = udp.recvfrom(65535)
@@ -353,16 +375,10 @@ class _Handler(socketserver.BaseRequestHandler):
                 # Other UDP (notably QUIC) is dropped so applications use TCP.
                 if target[1] != 53 or not payload or len(payload) > 65535:
                     continue
-                dns_target = target[0] if target[0] and target[0] != "0.0.0.0" else "1.1.1.1"
-                try:
-                    answer = _dns_over_ssh(self.server.transport, payload, dns_host=dns_target)
-                    udp.sendto(response_header + answer, source)
-                    self.server.add_traffic(
-                        uploaded=len(packet), downloaded=len(response_header) + len(answer)
-                    )
-                except Exception as error:
-                    _log_error(error)
+                dns_host = target[0] if target[0] and target[0] != "0.0.0.0" else "1.1.1.1"
+                executor.submit(handle_dns, packet, source, dns_host, payload, response_header)
         finally:
+            executor.shutdown(wait=False, cancel_futures=True)
             udp.close()
 
 

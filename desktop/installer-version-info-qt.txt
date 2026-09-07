@@ -17,7 +17,7 @@ VSVersionInfo(
          StringStruct(u'FileDescription', u'Pelmeni VPN Desktop Setup'),
          StringStruct(u'FileVersion', u'1.40.0'),
          StringStruct(u'InternalName', u'PelmeniVPN-Desktop-Setup'),
-         StringStruct(u'OriginalFilename', u'PelmeniVPN-Windows-Setup-1.40-beta1.exe'),
+         StringStruct(u'OriginalFilename', u'PelmeniVPN-Windows-Setup-1.40-beta2.exe'),
          StringStruct(u'ProductName', u'Pelmeni VPN Desktop'),
          StringStruct(u'ProductVersion', u'1.40.0')]
       )

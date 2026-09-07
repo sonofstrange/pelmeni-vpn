@@ -210,8 +210,13 @@ try:
             win32event.SetEvent(self.stop_event)
 
         def SvcDoRun(self) -> None:
-            self.ReportServiceStatus(win32service.SERVICE_RUNNING)
-            run_service_worker(DEFAULT_IPC_PORT, self.py_stop_event)
+            try:
+                self.ReportServiceStatus(win32service.SERVICE_RUNNING)
+                run_service_worker(DEFAULT_IPC_PORT, self.py_stop_event)
+            except Exception:
+                pass
+            finally:
+                self.ReportServiceStatus(win32service.SERVICE_STOPPED)
 
 except ImportError:
     PelmeniWindowsService = None  # type: ignore
@@ -264,7 +269,7 @@ def install_service() -> int:
         return _elevate_cmd(["--install-service"])
 
     import subprocess
-    bin_path = f'"{sys.executable}" "{Path(__file__).resolve().parents[1] / "service_entry.py"}" --run-service'
+    bin_path = f'"{sys.executable}" "{Path(__file__).resolve().parents[1] / "service_entry.py"}"'
     script = f'''
 $name = "{SERVICE_NAME}"
 $bin = '{bin_path}'

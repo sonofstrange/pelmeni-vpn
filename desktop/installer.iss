@@ -1,7 +1,7 @@
 #define MyAppName "Пельмени VPN Desktop"
 #define MyAppVersion "1.40.0"
 #define MyAppExeName "PelmeniVPN-Desktop.exe"
-#define MySetupName "PelmeniVPN-Windows-Setup-1.40-beta1"
+#define MySetupName "PelmeniVPN-Windows-Setup-1.40-beta2"
 
 [Setup]
 AppId={{A3E26D86-3C0A-41EA-95D6-CE7D1BE54192}

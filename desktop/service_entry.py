@@ -39,9 +39,9 @@ def install_service() -> int:
 
     target_exe = sys.executable if getattr(sys, "frozen", False) else sys.executable
     if not getattr(sys, "frozen", False):
-        bin_path = f'"{target_exe}" "{Path(sys.argv[0]).resolve()}" --run-service'
+        bin_path = f'"{target_exe}" "{Path(sys.argv[0]).resolve()}"'
     else:
-        bin_path = f'"{target_exe}" --run-service'
+        bin_path = f'"{target_exe}"'
 
     script = f'''
 $name = "{SERVICE_NAME}"
@@ -130,8 +130,10 @@ def main() -> int:
     if args.run_service or not any(vars(args).values()):
         if PelmeniWindowsService is not None and "--run-worker" not in sys.argv:
             try:
-                import win32serviceutil
-                win32serviceutil.HandleCommandLine(PelmeniWindowsService)
+                import servicemanager
+                servicemanager.Initialize()
+                servicemanager.PrepareToHostSingle(PelmeniWindowsService)
+                servicemanager.StartServiceCtrlDispatcher()
                 return 0
             except Exception:
                 pass

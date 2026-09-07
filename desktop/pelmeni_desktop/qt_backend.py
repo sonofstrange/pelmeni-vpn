@@ -424,6 +424,7 @@ class DesktopBackend(QObject):
     def _tick(self) -> None:
         active = self.manager.is_active()
         if active:
+            self._consecutive_inactive = 0
             uploaded, downloaded = self.manager.traffic()
             total = uploaded + downloaded
             now = time.monotonic()
@@ -436,14 +437,17 @@ class DesktopBackend(QObject):
             self._last_sample_time = now
             self._last_sample_bytes = total
             self.stateChanged.emit()
-        if not active and not self._connecting and not self._stopping and (self._proxy or self._vpn):
-            lost_proxy, lost_vpn = self._proxy, self._vpn
-            self._proxy = self._vpn = False
-            self._disable_vpn()
-            self._set_status("Соединение потеряно")
-            if self.config.get("auto_reconnect") and not self._intentional_stop:
-                self._proxy, self._vpn = lost_proxy, lost_vpn
-                QTimer.singleShot(2500, self._start_connection)
+        elif not self._connecting and not self._stopping and (self._proxy or self._vpn):
+            self._consecutive_inactive = getattr(self, "_consecutive_inactive", 0) + 1
+            if self._consecutive_inactive >= 3:
+                self._consecutive_inactive = 0
+                lost_proxy, lost_vpn = self._proxy, self._vpn
+                self._proxy = self._vpn = False
+                self._disable_vpn()
+                self._set_status("Соединение потеряно")
+                if self.config.get("auto_reconnect") and not self._intentional_stop:
+                    self._proxy, self._vpn = lost_proxy, lost_vpn
+                    QTimer.singleShot(2500, self._start_connection)
 
     @Slot()
     def shutdown(self) -> None:

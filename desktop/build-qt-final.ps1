@@ -80,15 +80,15 @@ try {
     } catch {
         Write-Warning "Could not overwrite release\PelmeniVPN-Service.exe"
     }
-    if (Test-Path "dist\PelmeniVPN-Windows-Setup-1.40-beta1.exe") {
+    if (Test-Path "dist\PelmeniVPN-Windows-Setup-1.40-beta2.exe") {
         try {
-            Copy-Item "dist\PelmeniVPN-Windows-Setup-1.40-beta1.exe" (Join-Path $ReleaseDir "PelmeniVPN-Windows-Setup-1.40-beta1.exe") -Force
+            Copy-Item "dist\PelmeniVPN-Windows-Setup-1.40-beta2.exe" (Join-Path $ReleaseDir "PelmeniVPN-Windows-Setup-1.40-beta2.exe") -Force
         } catch {
-            Write-Warning "Could not overwrite release\PelmeniVPN-Windows-Setup-1.40-beta1.exe"
+            Write-Warning "Could not overwrite release\PelmeniVPN-Windows-Setup-1.40-beta2.exe"
         }
     }
 
-    $PortableZipDir = Join-Path $env:TEMP "PelmeniVPN-Windows-v1.40-beta1"
+    $PortableZipDir = Join-Path $env:TEMP "PelmeniVPN-Windows-v1.40-beta2"
     if (Test-Path $PortableZipDir) { Remove-Item -Recurse -Force $PortableZipDir }
     New-Item -ItemType Directory -Force -Path $PortableZipDir | Out-Null
     Copy-Item "dist\PelmeniVPN-Desktop.exe" $PortableZipDir -Force
@@ -96,7 +96,7 @@ try {
     Copy-Item "dist\PelmeniVPN-Service.exe" $PortableZipDir -Force
     Copy-Item "runtime" (Join-Path $PortableZipDir "runtime") -Recurse -Force
 
-    $ZipTarget = Join-Path $ReleaseDir "PelmeniVPN-Windows-v1.40-beta1.zip"
+    $ZipTarget = Join-Path $ReleaseDir "PelmeniVPN-Windows-v1.40-beta2.zip"
     if (Test-Path $ZipTarget) { Remove-Item -Force $ZipTarget }
     Compress-Archive -Path "$PortableZipDir\*" -DestinationPath $ZipTarget -Force
     Write-Host "Release packaging completed: $ZipTarget"

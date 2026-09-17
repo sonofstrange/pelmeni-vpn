@@ -22,7 +22,7 @@ from .version import APP_VERSION
 
 
 GITHUB_API = "https://api.github.com/repos/sonofstrange/pelmeni-vpn"
-PUBLIC_API = GITHUB_API + "/issues?state=open&labels=public-server&per_page=100"
+PUBLIC_API = "http://185.176.94.10:8765/api/v1/servers"
 PUBLIC_MARKER = "PELMENI_PUBLIC_V1:"
 DEFAULT_WINDOW_KIB = 640
 DEFAULT_PACKET_KIB = 32
@@ -185,18 +185,20 @@ def _request_json(url: str, timeout: int = 20) -> Any:
 
 
 def load_public_servers() -> list[dict[str, Any]]:
+    import urllib.request as _req
+    with _req.urlopen(
+        _req.Request(PUBLIC_API, headers={"User-Agent": "PelmeniVPN-Desktop/2"}),
+        timeout=20,
+    ) as response:
+        body = response.read(512 * 1024 + 1)
+    if len(body) > 512 * 1024:
+        raise RuntimeError("Ответ сервера слишком большой.")
+    servers = json.loads(body.decode("utf-8"))
     result: list[dict[str, Any]] = []
-    for issue in _request_json(PUBLIC_API):
-        body = str(issue.get("body") or "")
-        marker = body.find(PUBLIC_MARKER)
-        if marker < 0:
-            continue
-        encoded = body[marker + len(PUBLIC_MARKER):].split("-->", 1)[0].strip()
+    for entry in servers:
         try:
-            entry = json.loads(_b64url_decode(encoded).decode("utf-8"))
             if int(entry.get("format", 0)) != 1:
                 continue
-            entry["issue_url"] = str(issue.get("html_url") or "")
             result.append(entry)
         except Exception:
             continue

@@ -200,6 +200,23 @@ public class MainActivity extends Activity {
         ServerProfiles.migrateLegacy(initialStore);
         ServerProfiles.migratePerformanceDefaults(initialStore);
         SplitTunnel.ensureDefaults(initialStore);
+        // Фоново: гостям обновляем IP из реестра, владельцу — пушим свой новый IP в реестр
+        speedWorker.execute(() -> {
+            SecureStore bgStore = new SecureStore(this);
+            // Для всех профилей владельца: если IP поменялся — обновляем реестр
+            for (ServerProfiles.Profile p : ServerProfiles.list(bgStore)) {
+                PublicServerManager.syncHostToRegistry(bgStore, p);
+            }
+            // Проверяем переносы серверов для всех профилей (гостевых, публичных, личных)
+            boolean migrated = ServerProfiles.applyServerMigrations(bgStore);
+            if (migrated) {
+                runOnUiThread(() -> {
+                    loadSettings();
+                    ServerProfiles.Profile active = ServerProfiles.active(new SecureStore(this));
+                    Toast.makeText(this, "Сервер перенесён на " + (active != null ? active.host : "новый адрес"), Toast.LENGTH_LONG).show();
+                });
+            }
+        });
         Branding.restoreLauncherState(this);
         appTitle.setText(Branding.appName(this));
         updateDebugPanel();
@@ -3220,18 +3237,27 @@ public class MainActivity extends Activity {
                 String code = PublicServerManager.claim(store, entry);
                 ServerProfiles.Profile profile =
                         ServerAccessCode.importCode(store, code);
+                // Сохраняем pool_id — по нему будем автообновлять IP
+                if (!entry.poolId.isEmpty()) {
+                    profile = new ServerProfiles.Profile(
+                            profile.id, profile.name, profile.host, profile.sshPort,
+                            profile.user, profile.socksPort, profile.windowKiB,
+                            profile.packetKiB, profile.mtu, entry.poolId);
+                    ServerProfiles.replaceProfile(store, profile);
+                }
+                final ServerProfiles.Profile finalProfile = profile;
                 SshHostKeys.ScannedKey key = new SshHostKeys.ScannedKey(
                         entry.host, entry.sshPort,
                         entry.hostKeyType, entry.hostKey);
-                SshHostKeys.trust(store, profile, key);
+                SshHostKeys.trust(store, finalProfile, key);
                 if (ServerAccessCode.requestsTls(code)) {
-                    ServerAccessCode.importTls(store, profile, code);
+                    ServerAccessCode.importTls(store, finalProfile, code);
                 }
                 mainHandler.post(() -> {
                     loadSettings();
                     Toast.makeText(this,
                             "Добавлен бесплатный сервер «"
-                                    + profile.name + "»",
+                                    + finalProfile.name + "»",
                             Toast.LENGTH_LONG).show();
                     showHomePage();
                     if (reconnect) {
@@ -3474,16 +3500,25 @@ public class MainActivity extends Activity {
             }
             String name = profileName.getText().toString().trim();
             if (name.isEmpty()) name = h;
+            String poolId = profile == null ? "" : profile.poolId;
             ServerProfiles.Profile updated = new ServerProfiles.Profile(
                     profile == null
                             ? ServerProfiles.create(name, h, ssh, u, socks,
                             window, packet, mtu).id
                             : profile.id,
-                    name, h, ssh, u, socks, window, packet, mtu);
+                    name, h, ssh, u, socks, window, packet, mtu, poolId);
             boolean reconnect = running;
             if (reconnect) stopTunnel();
             try {
                 ServerProfiles.saveAndActivate(store, updated, pw);
+                if (profile != null && !profile.host.equalsIgnoreCase(h)) {
+                    String oldHost = profile.host;
+                    speedWorker.execute(() -> {
+                        SecureStore s = new SecureStore(this);
+                        PublicServerManager.recordMigration(s, oldHost, h, ssh, poolId);
+                        PublicServerManager.syncHostToRegistry(s, updated);
+                    });
+                }
                 loadSettings();
                 Toast.makeText(this, "Сервер сохранён", Toast.LENGTH_SHORT).show();
                 showServerList();
@@ -3562,9 +3597,8 @@ public class MainActivity extends Activity {
         LinearLayout warning = createCard();
         addCardTitle(warning, "Как сервер появится в каталоге");
         addCardSubtitle(warning,
-                "После настройки откроется GitHub Issue с уже заполненной "
-                        + "публикацией. Нажми Submit new issue. Закрытие Issue "
-                        + "убирает сервер из списка.");
+                "После настройки сервер автоматически появится в публичном "
+                        + "каталоге Пельмени VPN. Чтобы убрать его, нажми «Отключить».");
         page.addView(warning, pageCardParams());
         Button publish = new Button(this);
         publish.setText("НАСТРОИТЬ И ОПУБЛИКОВАТЬ");
@@ -3602,10 +3636,8 @@ public class MainActivity extends Activity {
                                         (int) maxValue, tls.isChecked());
                         mainHandler.post(() -> {
                             Toast.makeText(this,
-                                    "Сервер готов. Подтверди публикацию "
-                                            + "на GitHub.",
+                                    "Сервер опубликован в каталоге.",
                                     Toast.LENGTH_LONG).show();
-                            openPublicServerPublication(entry);
                             showServerEditor(profile);
                         });
                     } catch (Exception publishError) {
@@ -3627,17 +3659,6 @@ public class MainActivity extends Activity {
         showScrollablePage(page, navAdd);
     }
 
-    private void openPublicServerPublication(
-            PublicServerRegistry.Entry entry) {
-        try {
-            startActivity(new Intent(Intent.ACTION_VIEW,
-                    PublicServerRegistry.publishUri(entry)));
-        } catch (Exception error) {
-            Toast.makeText(this,
-                    "Не удалось открыть GitHub: " + error.getMessage(),
-                    Toast.LENGTH_LONG).show();
-        }
-    }
 
     private void showPublishedServerPage(
             ServerProfiles.Profile profile,
@@ -3657,9 +3678,6 @@ public class MainActivity extends Activity {
         addPageAction(page, "Изменить параметры раздачи",
                 "Обновить лимиты, срок или описание сервера в каталоге",
                 () -> showPublishServerPage(profile));
-        addPageAction(page, "Открыть публикацию GitHub",
-                "Создать Issue или открыть новую заполненную форму",
-                () -> openPublicServerPublication(entry));
         addPageAction(page, "Очистить всех участников",
                 "Удалить все выданные аккаунты этого публичного пула с сервера",
                 () -> confirmRevokeAllPublicUsers(profile, entry.poolId));
@@ -3674,7 +3692,7 @@ public class MainActivity extends Activity {
                 .setTitle("Отключить публичный режим?")
                 .setMessage("Новые люди больше не смогут получать аккаунты. "
                         + "Уже выданные доступы продолжат работать, пока ты не нажмёшь «Очистить всех участников». "
-                        + "Также закрой GitHub Issue, чтобы убрать запись из каталога.")
+                        + "Сервер также будет удалён из публичного каталога.")
                 .setPositiveButton("Отключить", (dialog, which) -> {
                     disable.setEnabled(false);
                     disable.setText("ОТКЛЮЧАЮ…");
@@ -3685,8 +3703,7 @@ public class MainActivity extends Activity {
                                     profile, entry);
                             mainHandler.post(() -> {
                                 Toast.makeText(this,
-                                        "Публичный режим отключён. "
-                                                + "Закрой GitHub Issue.",
+                                        "Публичный режим отключён.",
                                         Toast.LENGTH_LONG).show();
                                 showServerEditor(profile);
                             });
@@ -4361,6 +4378,19 @@ public class MainActivity extends Activity {
                             .show();
                 });
             } catch (Exception error) {
+                SecureStore store = new SecureStore(this);
+                if (ServerProfiles.applyServerMigrations(store)) {
+                    ServerProfiles.Profile newProfile = ServerProfiles.active(store);
+                    if (newProfile != null && !newProfile.host.equalsIgnoreCase(profile.host)) {
+                        runOnUiThread(() -> {
+                            hostKeyCheckRunning = false;
+                            loadSettings();
+                            Toast.makeText(this, "Сервер перенесён на " + newProfile.host, Toast.LENGTH_LONG).show();
+                            ensureSshHostKey(newProfile, onVerified, onCancelled, forceCheck);
+                        });
+                        return;
+                    }
+                }
                 runOnUiThread(() -> {
                     hostKeyCheckRunning = false;
                     if (isFinishing() || isDestroyed()) return;

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Разрешаем HTTP к нашему API-серверу -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">185.176.94.10</domain>
+    </domain-config>
+    <!-- Всё остальное — только HTTPS -->
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>

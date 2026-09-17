@@ -5,7 +5,10 @@ import org.json.JSONObject;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
 
 final class ServerProfiles {
@@ -24,9 +27,16 @@ final class ServerProfiles {
         final int windowKiB;
         final int packetKiB;
         final int mtu;
+        /** pool_id публичного сервера, если профиль получен через каталог. Иначе пустая строка. */
+        final String poolId;
 
         Profile(String id, String name, String host, String sshPort, String user,
                 String socksPort, int windowKiB, int packetKiB, int mtu) {
+            this(id, name, host, sshPort, user, socksPort, windowKiB, packetKiB, mtu, "");
+        }
+
+        Profile(String id, String name, String host, String sshPort, String user,
+                String socksPort, int windowKiB, int packetKiB, int mtu, String poolId) {
             this.id = id;
             this.name = name;
             this.host = host;
@@ -36,6 +46,7 @@ final class ServerProfiles {
             this.windowKiB = windowKiB;
             this.packetKiB = packetKiB;
             this.mtu = mtu;
+            this.poolId = poolId == null ? "" : poolId;
         }
     }
 
@@ -110,7 +121,8 @@ final class ServerProfiles {
                         item.optString("socks_port", "1080"),
                         item.optInt("window_kib", NetworkTuning.DEFAULT_WINDOW_KIB),
                         item.optInt("packet_kib", NetworkTuning.DEFAULT_PACKET_KIB),
-                        item.optInt("mtu", NetworkTuning.DEFAULT_MTU)));
+                        item.optInt("mtu", NetworkTuning.DEFAULT_MTU),
+                        item.optString("pool_id", "")));
             }
         } catch (Exception ignored) {
         }
@@ -229,6 +241,11 @@ final class ServerProfiles {
         return true;
     }
 
+    /** Публично доступный replace для обновления полей профиля (например pool_id). */
+    static void replaceProfile(SecureStore store, Profile updated) {
+        replace(store, updated);
+    }
+
     private static Profile find(SecureStore store, String id) {
         for (Profile profile : list(store)) {
             if (profile.id.equals(id)) return profile;
@@ -272,7 +289,7 @@ final class ServerProfiles {
         JSONArray array = new JSONArray();
         try {
             for (Profile profile : profiles) {
-                array.put(new JSONObject()
+                JSONObject obj = new JSONObject()
                         .put("id", profile.id)
                         .put("name", profile.name)
                         .put("host", profile.host)
@@ -281,11 +298,170 @@ final class ServerProfiles {
                         .put("socks_port", profile.socksPort)
                         .put("window_kib", profile.windowKiB)
                         .put("packet_kib", profile.packetKiB)
-                        .put("mtu", profile.mtu));
+                        .put("mtu", profile.mtu);
+                if (!profile.poolId.isEmpty()) {
+                    obj.put("pool_id", profile.poolId);
+                }
+                array.put(obj);
             }
             store.putPlain(PROFILES_KEY, array.toString());
         } catch (Exception error) {
             throw new IllegalStateException(error);
+        }
+    }
+
+    /**
+     * Фоново проверяет наш реестр и таблицу переносов (migrations),
+     * обновляя host/ssh_port у ВСЕХ профилей (гостевых, публичных, личных).
+     * Возвращает true если хотя бы один профиль был обновлён.
+     */
+    static boolean applyServerMigrations(SecureStore store) {
+        List<Profile> profiles = list(store);
+        if (profiles.isEmpty()) return false;
+        boolean anyChanged = false;
+
+        Map<String, JSONObject> migrationsByOldHost = new HashMap<>();
+        try {
+            java.net.HttpURLConnection conn = (java.net.HttpURLConnection)
+                    new java.net.URL(PublicServerRegistry.REGISTRY_API + "/migrations").openConnection();
+            conn.setConnectTimeout(6_000);
+            conn.setReadTimeout(6_000);
+            conn.setRequestProperty("User-Agent", "PelmeniVPN-Android");
+            if (conn.getResponseCode() == 200) {
+                byte[] bytes = conn.getInputStream().readAllBytes();
+                JSONArray arr = new JSONArray(new String(bytes, StandardCharsets.UTF_8));
+                for (int i = 0; i < arr.length(); i++) {
+                    JSONObject item = arr.getJSONObject(i);
+                    String oldHost = item.optString("old_host", "").trim().toLowerCase(Locale.ROOT);
+                    if (!oldHost.isEmpty()) {
+                        migrationsByOldHost.put(oldHost, item);
+                    }
+                }
+            }
+            conn.disconnect();
+        } catch (Exception ignored) {
+        }
+
+        Map<String, JSONObject> serversByPoolId = new HashMap<>();
+        try {
+            java.net.HttpURLConnection conn = (java.net.HttpURLConnection)
+                    new java.net.URL(PublicServerRegistry.REGISTRY_API + "/servers").openConnection();
+            conn.setConnectTimeout(6_000);
+            conn.setReadTimeout(6_000);
+            conn.setRequestProperty("User-Agent", "PelmeniVPN-Android");
+            if (conn.getResponseCode() == 200) {
+                byte[] bytes = conn.getInputStream().readAllBytes();
+                JSONArray arr = new JSONArray(new String(bytes, StandardCharsets.UTF_8));
+                for (int i = 0; i < arr.length(); i++) {
+                    JSONObject item = arr.getJSONObject(i);
+                    String poolId = item.optString("pool_id", "").trim();
+                    if (!poolId.isEmpty()) {
+                        serversByPoolId.put(poolId, item);
+                    }
+                }
+            }
+            conn.disconnect();
+        } catch (Exception ignored) {
+        }
+
+        String activeId = store.getPlain(ACTIVE_KEY, "");
+
+        for (int i = 0; i < profiles.size(); i++) {
+            Profile profile = profiles.get(i);
+            String currentHost = profile.host.trim();
+            String currentHostLower = currentHost.toLowerCase(Locale.ROOT);
+            String newHost = null;
+            String newPort = profile.sshPort;
+            String hostKeyType = "";
+            String hostKey = "";
+
+            if (migrationsByOldHost.containsKey(currentHostLower)) {
+                JSONObject mig = migrationsByOldHost.get(currentHostLower);
+                newHost = mig.optString("new_host", "").trim();
+                newPort = Integer.toString(mig.optInt("ssh_port", parsePortInt(profile.sshPort, 22)));
+                hostKeyType = mig.optString("host_key_type", "");
+                hostKey = mig.optString("host_key", "");
+            }
+
+            if ((newHost == null || newHost.isEmpty()) && !profile.poolId.isEmpty() && serversByPoolId.containsKey(profile.poolId)) {
+                JSONObject srv = serversByPoolId.get(profile.poolId);
+                String srvHost = srv.optString("host", "").trim();
+                if (!srvHost.isEmpty() && !srvHost.equalsIgnoreCase(currentHost)) {
+                    newHost = srvHost;
+                    newPort = Integer.toString(srv.optInt("ssh_port", parsePortInt(profile.sshPort, 22)));
+                    hostKeyType = srv.optString("host_key_type", "");
+                    hostKey = srv.optString("host_key", "");
+                }
+            }
+
+            // Если не нашли в общем списке, пробуем точечный запрос к /migrations/{host}
+            if (newHost == null || newHost.isEmpty()) {
+                try {
+                    java.net.HttpURLConnection conn = (java.net.HttpURLConnection)
+                            new java.net.URL(PublicServerRegistry.REGISTRY_API + "/migrations/" + currentHost).openConnection();
+                    conn.setConnectTimeout(4_000);
+                    conn.setReadTimeout(4_000);
+                    if (conn.getResponseCode() == 200) {
+                        byte[] bytes = conn.getInputStream().readAllBytes();
+                        JSONObject obj = new JSONObject(new String(bytes, StandardCharsets.UTF_8));
+                        if (obj.optBoolean("migrated", false)) {
+                            newHost = obj.optString("new_host", "").trim();
+                            newPort = Integer.toString(obj.optInt("ssh_port", parsePortInt(profile.sshPort, 22)));
+                            hostKeyType = obj.optString("host_key_type", "");
+                            hostKey = obj.optString("host_key", "");
+                        }
+                    }
+                    conn.disconnect();
+                } catch (Exception ignored) {
+                }
+            }
+
+            if (newHost != null && !newHost.isEmpty() && (!newHost.equalsIgnoreCase(currentHost) || !newPort.equals(profile.sshPort))) {
+                SshHostKeys.ScannedKey oldKey = SshHostKeys.trustedKey(store, profile);
+                SshHostKeys.clearProfile(store, profile.id);
+
+                Profile updated = new Profile(profile.id, profile.name, newHost, newPort,
+                        profile.user, profile.socksPort, profile.windowKiB, profile.packetKiB,
+                        profile.mtu, profile.poolId);
+                profiles.set(i, updated);
+                anyChanged = true;
+
+                // Перепривязываем ключ SSH для нового хоста
+                if (!hostKey.isEmpty() && !hostKeyType.isEmpty()) {
+                    try {
+                        SshHostKeys.trust(store, updated, new SshHostKeys.ScannedKey(newHost, Integer.parseInt(newPort), hostKeyType, hostKey));
+                    } catch (Exception ignored) {
+                    }
+                } else if (oldKey != null) {
+                    try {
+                        SshHostKeys.trust(store, updated, new SshHostKeys.ScannedKey(newHost, Integer.parseInt(newPort), oldKey.type, oldKey.encodedKey));
+                    } catch (Exception ignored) {
+                    }
+                }
+
+                if (profile.id.equals(activeId)) {
+                    store.putPlain("host", newHost);
+                    store.putPlain("port", newPort);
+                }
+            }
+        }
+
+        if (anyChanged) {
+            write(store, profiles);
+        }
+        return anyChanged;
+    }
+
+    static void refreshHostsFromRegistry(SecureStore store) {
+        applyServerMigrations(store);
+    }
+
+    private static int parsePortInt(String raw, int defaultValue) {
+        try {
+            int port = Integer.parseInt(raw.trim());
+            return port > 0 && port <= 65535 ? port : defaultValue;
+        } catch (Exception ignored) {
+            return defaultValue;
         }
     }
 

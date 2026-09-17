@@ -367,6 +367,16 @@ public class TunnelService extends Service {
                             stopAfterFailure(message);
                             break;
                         }
+                        // При ошибке подключения проверяем перенос сервера через реестр
+                        SecureStore retryStore = new SecureStore(this);
+                        if (ServerProfiles.applyServerMigrations(retryStore)) {
+                            fastRetry = true;
+                            delaySeconds = 1;
+                            sendBroadcast(new Intent(ACTION_STATUS).setPackage(getPackageName())
+                                    .putExtra(EXTRA_SERVER_CHANGED, true));
+                            send("Сервер перенесён на " + retryStore.getPlain("host", "") + ". Переподключаемся…");
+                            continue;
+                        }
                         if (!maybeSwitchServer(message)) {
                             send(message + " Повтор через " + delaySeconds + " сек…");
                         }

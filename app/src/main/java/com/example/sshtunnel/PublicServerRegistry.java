@@ -17,11 +17,8 @@ import java.util.List;
 import java.util.Locale;
 
 final class PublicServerRegistry {
-    private static final String API =
-            "https://api.github.com/repos/sonofstrange/pelmeni-vpn/issues"
-                    + "?state=open&labels=public-server&per_page=100";
-    private static final String ISSUE =
-            "https://github.com/sonofstrange/pelmeni-vpn/issues/new";
+    static final String REGISTRY_API = "http://185.176.94.10:8765/api/v1";
+    private static final String API = REGISTRY_API + "/servers";
     private static final String MARKER = "PELMENI_PUBLIC_V1:";
 
     enum TrustLevel {
@@ -213,71 +210,28 @@ final class PublicServerRegistry {
                 (HttpURLConnection) new URL(API).openConnection();
         connection.setConnectTimeout(15_000);
         connection.setReadTimeout(20_000);
-        connection.setRequestProperty("Accept", "application/vnd.github+json");
         connection.setRequestProperty("User-Agent", "Pelmeni-VPN-Android");
         try {
             int code = connection.getResponseCode();
             if (code != 200) {
-                throw new Exception("GitHub вернул HTTP " + code);
+                throw new Exception("Сервер вернул HTTP " + code);
             }
-            JSONArray issues = new JSONArray(read(connection.getInputStream()));
+            JSONArray servers = new JSONArray(read(connection.getInputStream()));
             List<Entry> result = new ArrayList<>();
-            for (int i = 0; i < issues.length(); i++) {
-                JSONObject issue = issues.getJSONObject(i);
-                String body = issue.optString("body", "");
-                int marker = body.indexOf(MARKER);
-                if (marker < 0) continue;
-                int start = marker + MARKER.length();
-                int end = body.indexOf("-->", start);
-                String encoded = (end < 0 ? body.substring(start)
-                        : body.substring(start, end)).trim();
+            for (int i = 0; i < servers.length(); i++) {
                 try {
-                    byte[] decoded = Base64.decode(encoded,
-                            Base64.URL_SAFE | Base64.NO_WRAP
-                                    | Base64.NO_PADDING);
-                    JSONObject json = new JSONObject(
-                            new String(decoded, StandardCharsets.UTF_8));
-                    if (json.optInt("format", 0) == 1) {
-                        String authorLogin = "";
-                        JSONObject user = issue.optJSONObject("user");
-                        if (user != null) {
-                            authorLogin = user.optString("login", "");
-                        }
-                        String assoc = issue.optString("author_association", "");
-
-                        TrustLevel trustLevel = TrustLevel.COMMUNITY;
-                        if ("OWNER".equalsIgnoreCase(assoc)
-                                || "sonofstrange".equalsIgnoreCase(authorLogin)
-                                || (json.optString("name","").toLowerCase(Locale.ROOT).contains("пельмен"))
-                                || "31.76.110.227".equals(json.optString("host",""))) {
-                            trustLevel = TrustLevel.OFFICIAL;
-                        } else if ("MEMBER".equalsIgnoreCase(assoc) || "COLLABORATOR".equalsIgnoreCase(assoc)) {
-                            trustLevel = TrustLevel.VERIFIED;
-                        }
-
-                        JSONArray labels = issue.optJSONArray("labels");
-                        if (labels != null) {
-                            for (int l = 0; l < labels.length(); l++) {
-                                JSONObject lbl = labels.optJSONObject(l);
-                                if (lbl != null) {
-                                    String lname = lbl.optString("name", "").toLowerCase(Locale.ROOT);
-                                    if (lname.contains("suspicious") || lname.contains("untrusted") || lname.contains("fake") || lname.contains("scam") || lname.contains("warning")) {
-                                        trustLevel = TrustLevel.SUSPICIOUS;
-                                        break;
-                                    } else if (lname.contains("official") || lname.contains("пельмени") || lname.contains("pelmeni-team")) {
-                                        trustLevel = TrustLevel.OFFICIAL;
-                                    } else if (lname.contains("verified") || lname.contains("trusted")) {
-                                        if (trustLevel != TrustLevel.OFFICIAL) trustLevel = TrustLevel.VERIFIED;
-                                    }
-                                }
-                            }
-                        }
-
-                        result.add(new Entry(
-                                json, issue.optString("html_url", ""), trustLevel, authorLogin));
+                    JSONObject json = servers.getJSONObject(i);
+                    if (json.optInt("format", 0) != 1) continue;
+                    String trustStr = json.optString("trust_level", "COMMUNITY");
+                    TrustLevel trustLevel;
+                    try {
+                        trustLevel = TrustLevel.valueOf(trustStr.toUpperCase(Locale.ROOT));
+                    } catch (IllegalArgumentException ignored) {
+                        trustLevel = TrustLevel.COMMUNITY;
                     }
+                    result.add(new Entry(json, json.optString("issue_url", ""), trustLevel, ""));
                 } catch (Exception ignored) {
-                    // One malformed community entry must not hide valid servers.
+                    // Одна битая запись не должна скрывать остальные
                 }
             }
             Collections.sort(result, (a, b) -> {
@@ -292,25 +246,6 @@ final class PublicServerRegistry {
         }
     }
 
-    static Uri publishUri(Entry entry) throws Exception {
-        String encoded = Base64.encodeToString(
-                entry.toJson().toString().getBytes(StandardCharsets.UTF_8),
-                Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING);
-        String body = "<!-- " + MARKER + encoded + " -->\n\n"
-                + "### Бесплатный сервер Пельмени VPN\n\n"
-                + "- Название: " + entry.name + "\n"
-                + "- Регион: " + (entry.location.isEmpty()
-                ? "не указан" : entry.location) + "\n"
-                + "- Лимиты: " + entry.limitsLabel() + "\n"
-                + "- TLS: " + (entry.tls ? "да" : "нет") + "\n\n"
-                + "Не редактируйте скрытый служебный маркер выше. "
-                + "Чтобы убрать сервер из каталога, закройте Issue.";
-        return Uri.parse(ISSUE).buildUpon()
-                .appendQueryParameter("template", "public-server.md")
-                .appendQueryParameter("title", "[PUBLIC] " + entry.name)
-                .appendQueryParameter("body", body)
-                .build();
-    }
 
     private static String read(InputStream input) throws Exception {
         ByteArrayOutputStream output = new ByteArrayOutputStream();

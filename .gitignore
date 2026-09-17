@@ -23,3 +23,11 @@ release/
 # OS metadata
 .DS_Store
 Thumbs.db
+
+# Секреты и скрипты деплоя (никогда не должны попасть в git)
+admin.token.local
+backend/do_deploy.py
+backend/deploy2.py
+backend/check_shell.py
+backend/deploy.sh
+backend/*.token*

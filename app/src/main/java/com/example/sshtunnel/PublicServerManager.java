@@ -70,6 +70,55 @@ final class PublicServerManager {
                 new PublicServerRegistry.Entry(result, "");
         store.putEncrypted(storageKey(profile.id),
                 result.toString().getBytes(StandardCharsets.UTF_8));
+
+        // Регистрируем сервер в каталоге автоматически
+        try {
+            JSONObject apiBody = new JSONObject()
+                    .put("format", 1)
+                    .put("pool_id", result.getString("pool_id"))
+                    .put("name", name)
+                    .put("location", location)
+                    .put("host", profile.host)
+                    .put("ssh_port", Integer.parseInt(profile.sshPort))
+                    .put("registrar_user", result.getString("registrar_user"))
+                    .put("registrar_password", result.getString("registrar_password"))
+                    .put("host_key_type", trusted.type)
+                    .put("host_key", trusted.encodedKey)
+                    .put("fingerprint", trusted.fingerprint)
+                    .put("days", days)
+                    .put("daily_mb", dailyMb)
+                    .put("monthly_mb", monthlyMb)
+                    .put("speed_mbps", speedMbps)
+                    .put("max_users", maxUsers)
+                    .put("tls", useTls);
+            byte[] body = apiBody.toString().getBytes(StandardCharsets.UTF_8);
+            java.net.HttpURLConnection conn = (java.net.HttpURLConnection)
+                    new java.net.URL(PublicServerRegistry.REGISTRY_API + "/servers").openConnection();
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setDoOutput(true);
+            conn.setConnectTimeout(10_000);
+            conn.setReadTimeout(10_000);
+            conn.getOutputStream().write(body);
+            int code = conn.getResponseCode();
+            if (code == 201) {
+                // Сохраняем update_token для будущих обновлений
+                try {
+                    InputStream is = conn.getInputStream();
+                    byte[] resp = is.readAllBytes();
+                    JSONObject reg = new JSONObject(new String(resp, StandardCharsets.UTF_8));
+                    String updateToken = reg.optString("update_token", "");
+                    if (!updateToken.isEmpty()) {
+                        store.putEncrypted("public_update_token_" + result.getString("pool_id"),
+                                updateToken.getBytes(StandardCharsets.UTF_8));
+                    }
+                } catch (Exception ignored) { }
+            }
+            conn.disconnect();
+        } catch (Exception ignored) {
+            // Не блокируем если API недоступен — сервер всё равно настроен
+        }
+
         return entry;
     }
 
@@ -105,6 +154,25 @@ final class PublicServerManager {
             throw new Exception("Сервер не подтвердил отключение.");
         }
         store.removeEncrypted(storageKey(profile.id));
+
+        // Удаляем из каталога
+        try {
+            byte[] tokenBytes = store.getEncrypted("public_update_token_" + entry.poolId);
+            if (tokenBytes != null) {
+                String updateToken = new String(tokenBytes, StandardCharsets.UTF_8);
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection)
+                        new java.net.URL(PublicServerRegistry.REGISTRY_API + "/servers/" + entry.poolId).openConnection();
+                conn.setRequestMethod("DELETE");
+                conn.setRequestProperty("Authorization", "Bearer " + updateToken);
+                conn.setConnectTimeout(10_000);
+                conn.setReadTimeout(10_000);
+                conn.getResponseCode();
+                conn.disconnect();
+                store.removeEncrypted("public_update_token_" + entry.poolId);
+            }
+        } catch (Exception ignored) {
+            // Не блокируем если API недоступен
+        }
     }
 
     static PublicServerRegistry.Entry saved(
@@ -116,6 +184,85 @@ final class PublicServerManager {
                     new String(value, StandardCharsets.UTF_8)), "");
         } catch (Exception ignored) {
             return null;
+        }
+    }
+
+    /**
+     * Если у владельца сервера сменился IP в профиле — обновляет запись в реестре.
+     * Вызывать в фоне при старте. После этого гости при следующем запуске получат новый IP.
+     */
+    static void syncHostToRegistry(SecureStore store, ServerProfiles.Profile profile) {
+        PublicServerRegistry.Entry entry = saved(store, profile.id);
+        if (entry == null) return; // не публичный сервер
+        if (profile.host.equalsIgnoreCase(entry.host)
+                && profile.sshPort.equals(Integer.toString(entry.sshPort))) return; // IP не менялся
+        byte[] tokenBytes = store.getEncrypted("public_update_token_" + entry.poolId);
+        if (tokenBytes == null) return; // нет токена для обновления
+        try {
+            String updateToken = new String(tokenBytes, StandardCharsets.UTF_8);
+            JSONObject body = new JSONObject()
+                    .put("host", profile.host)
+                    .put("ssh_port", Integer.parseInt(profile.sshPort));
+            byte[] bodyBytes = body.toString().getBytes(StandardCharsets.UTF_8);
+            java.net.HttpURLConnection conn = (java.net.HttpURLConnection)
+                    new java.net.URL(PublicServerRegistry.REGISTRY_API
+                            + "/servers/" + entry.poolId).openConnection();
+            conn.setRequestMethod("PUT");
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setRequestProperty("Authorization", "Bearer " + updateToken);
+            conn.setDoOutput(true);
+            conn.setConnectTimeout(10_000);
+            conn.setReadTimeout(10_000);
+            conn.getOutputStream().write(bodyBytes);
+            conn.getResponseCode();
+            conn.disconnect();
+            // Обновляем локально сохранённую запись
+            try {
+                JSONObject stored = new JSONObject(
+                        new String(store.getEncrypted(storageKey(profile.id)),
+                                StandardCharsets.UTF_8));
+                stored.put("host", profile.host);
+                stored.put("ssh_port", Integer.parseInt(profile.sshPort));
+                store.putEncrypted(storageKey(profile.id),
+                        stored.toString().getBytes(StandardCharsets.UTF_8));
+            } catch (Exception ignored) { }
+        } catch (Exception ignored) {
+            // Нет сети — попробуем при следующем запуске
+        }
+    }
+
+    /**
+     * Отправляет в реестр запись о переносе сервера (старый IP -> новый IP).
+     * Любой гость или пользователь со старым IP автоматически подхватит новый адрес.
+     */
+    static void recordMigration(SecureStore store, String oldHost, String newHost, String sshPort, String poolId) {
+        if (oldHost == null || newHost == null || oldHost.trim().isEmpty() || newHost.trim().isEmpty()
+                || oldHost.trim().equalsIgnoreCase(newHost.trim())) return;
+        try {
+            int port = 22;
+            try { port = Integer.parseInt(sshPort.trim()); } catch (Exception ignored) {}
+            JSONObject body = new JSONObject()
+                    .put("old_host", oldHost.trim())
+                    .put("new_host", newHost.trim())
+                    .put("ssh_port", port)
+                    .put("pool_id", poolId == null ? "" : poolId);
+            byte[] bodyBytes = body.toString().getBytes(StandardCharsets.UTF_8);
+            java.net.HttpURLConnection conn = (java.net.HttpURLConnection)
+                    new java.net.URL(PublicServerRegistry.REGISTRY_API + "/migrations").openConnection();
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Content-Type", "application/json");
+            byte[] tokenBytes = poolId != null && !poolId.isEmpty()
+                    ? store.getEncrypted("public_update_token_" + poolId) : null;
+            if (tokenBytes != null) {
+                conn.setRequestProperty("Authorization", "Bearer " + new String(tokenBytes, StandardCharsets.UTF_8));
+            }
+            conn.setDoOutput(true);
+            conn.setConnectTimeout(8_000);
+            conn.setReadTimeout(8_000);
+            conn.getOutputStream().write(bodyBytes);
+            conn.getResponseCode();
+            conn.disconnect();
+        } catch (Exception ignored) {
         }
     }
 

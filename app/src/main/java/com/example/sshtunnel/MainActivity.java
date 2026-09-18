@@ -90,7 +90,7 @@ public class MainActivity extends Activity {
     private CheckBox showPassword, autoReconnect, startOnBoot, enableVpn, enableTelegram;
     private ScrollView mainScroll;
     private FrameLayout contentContainer;
-    private View navHome, navPeople, navSettings, navAdd;
+    private View navHome, navPeople, navSettings, navAdd, navDev;
     private View activePage;
     private View splitRouteProgress;
     private String peopleServerId;
@@ -195,6 +195,7 @@ public class MainActivity extends Activity {
         navPeople = findViewById(R.id.navPeople);
         navSettings = findViewById(R.id.navSettings);
         navAdd = findViewById(R.id.navAdd);
+        navDev = findViewById(R.id.navDev);
 
         SecureStore initialStore = new SecureStore(this);
         ServerProfiles.migrateLegacy(initialStore);
@@ -291,6 +292,9 @@ public class MainActivity extends Activity {
         navPeople.setOnClickListener(v -> showPeoplePage(null, null));
         navSettings.setOnClickListener(v -> showSettingsHub());
         navAdd.setOnClickListener(v -> showAddServerChoice());
+        if (navDev != null) {
+            navDev.setOnClickListener(v -> showDevRegistryPage());
+        }
         setSelectedNav(navHome);
         if (isQuickSettingsPreferences(getIntent())) {
             showHomePage();
@@ -1185,6 +1189,9 @@ public class MainActivity extends Activity {
                             checkedId == beta.getId()));
             channel.addView(channels);
             page.addView(channel, pageCardParams());
+            addPageAction(page, "Управление публичными серверами и переносами",
+                    "Статусы серверов (trust level), каталог и миграции IP",
+                    this::showDevRegistryPage);
         }
         addPageAction(page, "Проверить обновления сейчас",
                 developerUpdates
@@ -1278,6 +1285,9 @@ public class MainActivity extends Activity {
         tintNav(navPeople, selected == navPeople);
         tintNav(navSettings, selected == navSettings);
         tintNav(navAdd, selected == navAdd);
+        if (navDev != null) {
+            tintNav(navDev, selected == navDev);
+        }
     }
 
     private void tintNav(View view, boolean selected) {
@@ -3225,6 +3235,456 @@ public class MainActivity extends Activity {
         showScrollablePage(page, navAdd);
     }
 
+    private void showDevRegistryPage() {
+        SecureStore store = new SecureStore(this);
+        LinearLayout page = createPageContent("Управление реестром",
+                "Дебаг-режим: управление статусами публичных серверов (trust level) и активными переносами IP.");
+
+        // Карточка токена администратора
+        LinearLayout tokenCard = createCard();
+        String savedToken = store.getPlain("registry_admin_token", "").trim();
+        addCardTitle(tokenCard, "Ключ администратора API");
+        addCardSubtitle(tokenCard, savedToken.isEmpty()
+                ? "Admin token не задан. Для изменения статуса (trust level) требуется токен администратора."
+                : "Токен сохранён (" + (savedToken.length() > 6 ? savedToken.substring(0, 6) + "…" : "••••") + ")");
+        Button tokenBtn = new Button(this);
+        tokenBtn.setText(savedToken.isEmpty() ? "ЗАДАТЬ ADMIN TOKEN" : "ИЗМЕНИТЬ ADMIN TOKEN");
+        tokenBtn.setOnClickListener(v -> showAdminTokenDialog());
+        tokenCard.addView(tokenBtn);
+        page.addView(tokenCard, pageCardParams());
+
+        // Переключатель вкладок: Серверы / Переносы
+        LinearLayout tabRow = new LinearLayout(this);
+        tabRow.setOrientation(LinearLayout.HORIZONTAL);
+        tabRow.setPadding(0, dp(14), 0, dp(4));
+        Button tabServers = new Button(this);
+        tabServers.setText("СЕРВЕРЫ");
+        Button tabMigrations = new Button(this);
+        tabMigrations.setText("ПЕРЕНОСЫ");
+        LinearLayout.LayoutParams p1 = new LinearLayout.LayoutParams(0, dp(46), 1f);
+        LinearLayout.LayoutParams p2 = new LinearLayout.LayoutParams(0, dp(46), 1f);
+        p2.leftMargin = dp(8);
+        tabRow.addView(tabServers, p1);
+        tabRow.addView(tabMigrations, p2);
+        page.addView(tabRow);
+
+        LinearLayout container = new LinearLayout(this);
+        container.setOrientation(LinearLayout.VERTICAL);
+        page.addView(container);
+
+        final boolean[] showServers = new boolean[]{true};
+        Runnable render = () -> {
+            container.removeAllViews();
+            if (showServers[0]) {
+                tabServers.setTextColor(0xFFFBB26A);
+                tabMigrations.setTextColor(0xFF9297A2);
+                renderDevServersTab(container);
+            } else {
+                tabServers.setTextColor(0xFF9297A2);
+                tabMigrations.setTextColor(0xFFFBB26A);
+                renderDevMigrationsTab(container);
+            }
+        };
+
+        tabServers.setOnClickListener(v -> {
+            showServers[0] = true;
+            render.run();
+        });
+        tabMigrations.setOnClickListener(v -> {
+            showServers[0] = false;
+            render.run();
+        });
+
+        render.run();
+        showScrollablePage(page, navDev);
+    }
+
+    private void showAdminTokenDialog() {
+        SecureStore store = new SecureStore(this);
+        String current = store.getPlain("registry_admin_token", "").trim();
+        EditText input = new EditText(this);
+        input.setHint("Bearer-токен администратора");
+        input.setText(current);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        FrameLayout wrapper = new FrameLayout(this);
+        wrapper.setPadding(dp(20), dp(10), dp(20), dp(10));
+        wrapper.addView(input);
+        new AlertDialog.Builder(this)
+                .setTitle("Admin Token реестра")
+                .setMessage("Токен используется для подтверждения прав администратора при изменении trust_level и управлении записями.")
+                .setView(wrapper)
+                .setPositiveButton("Сохранить", (d, w) -> {
+                    String val = input.getText().toString().trim();
+                    store.putPlain("registry_admin_token", val);
+                    Toast.makeText(this, val.isEmpty() ? "Токен удалён" : "Токен сохранён", Toast.LENGTH_SHORT).show();
+                    showDevRegistryPage();
+                })
+                .setNegativeButton("Отмена", null)
+                .show();
+    }
+
+    private void renderDevServersTab(LinearLayout container) {
+        Button refreshBtn = new Button(this);
+        refreshBtn.setText("🔄 ОБНОВИТЬ СПИСОК СЕРВЕРОВ");
+        refreshBtn.setOnClickListener(v -> {
+            container.removeAllViews();
+            renderDevServersTab(container);
+        });
+        container.addView(refreshBtn, pageCardParams());
+
+        LinearLayout loadingCard = createCard();
+        addCardTitle(loadingCard, "Загрузка серверов…");
+        addCardSubtitle(loadingCard, "Запрашиваю список серверов из центрального реестра…");
+        container.addView(loadingCard, pageCardParams());
+
+        speedWorker.execute(() -> {
+            try {
+                List<PublicServerRegistry.Entry> entries = PublicServerRegistry.load();
+                mainHandler.post(() -> {
+                    container.removeView(loadingCard);
+                    if (entries.isEmpty()) {
+                        LinearLayout emptyCard = createCard();
+                        addCardTitle(emptyCard, "Нет серверов в каталоге");
+                        container.addView(emptyCard, pageCardParams());
+                        return;
+                    }
+                    for (PublicServerRegistry.Entry entry : entries) {
+                        LinearLayout card = createCard();
+                        addCardTitle(card, entry.name, entry.verified);
+                        StringBuilder info = new StringBuilder();
+                        info.append("Адрес: ").append(entry.host).append(":").append(entry.sshPort).append("\n");
+                        info.append("Статус: ").append(entry.trustLevel.icon).append(" ").append(entry.trustLevel.label).append("\n");
+                        if (!entry.location.isEmpty()) {
+                            info.append("Регион: ").append(entry.locationFlag()).append(" ").append(entry.location).append("\n");
+                        }
+                        info.append("Пользователей: макс. ").append(entry.maxUsers)
+                                .append(" · Дней: ").append(entry.days)
+                                .append(entry.tls ? " · TLS" : "")
+                                .append("\nPool ID: ").append(entry.poolId);
+                        addCardSubtitle(card, info.toString().trim());
+
+                        LinearLayout btnRow = new LinearLayout(this);
+                        btnRow.setOrientation(LinearLayout.HORIZONTAL);
+                        btnRow.setPadding(0, dp(8), 0, 0);
+
+                        Button trustBtn = new Button(this);
+                        trustBtn.setText("СТАТУС");
+                        trustBtn.setTextSize(12);
+                        trustBtn.setOnClickListener(v -> showChangeTrustDialog(entry, () -> {
+                            container.removeAllViews();
+                            renderDevServersTab(container);
+                        }));
+
+                        Button migrateBtn = new Button(this);
+                        migrateBtn.setText("ПЕРЕНОС");
+                        migrateBtn.setTextSize(12);
+                        migrateBtn.setOnClickListener(v -> showMigrateServerDialog(entry, () -> {
+                            container.removeAllViews();
+                            renderDevServersTab(container);
+                        }));
+
+                        Button delBtn = new Button(this);
+                        delBtn.setText("УДАЛИТЬ");
+                        delBtn.setTextSize(12);
+                        delBtn.setTextColor(0xFFFF7272);
+                        delBtn.setOnClickListener(v -> confirmDeleteServerRegistry(entry, () -> {
+                            container.removeAllViews();
+                            renderDevServersTab(container);
+                        }));
+
+                        LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(0, dp(44), 1f);
+                        btnRow.addView(trustBtn, bp);
+                        LinearLayout.LayoutParams bp2 = new LinearLayout.LayoutParams(0, dp(44), 1f);
+                        bp2.leftMargin = dp(6);
+                        btnRow.addView(migrateBtn, bp2);
+                        LinearLayout.LayoutParams bp3 = new LinearLayout.LayoutParams(0, dp(44), 1f);
+                        bp3.leftMargin = dp(6);
+                        btnRow.addView(delBtn, bp3);
+
+                        card.addView(btnRow);
+                        container.addView(card, pageCardParams());
+                    }
+                });
+            } catch (Exception err) {
+                mainHandler.post(() -> {
+                    container.removeView(loadingCard);
+                    LinearLayout errCard = createCard();
+                    addCardTitle(errCard, "Ошибка загрузки каталога");
+                    addCardSubtitle(errCard, err.getMessage());
+                    container.addView(errCard, pageCardParams());
+                });
+            }
+        });
+    }
+
+    private void showChangeTrustDialog(PublicServerRegistry.Entry entry, Runnable onComplete) {
+        String[] options = new String[]{
+                "🛡️ Официальный (OFFICIAL)",
+                "✓ Проверенный (VERIFIED)",
+                "🌐 Сообщество (COMMUNITY)",
+                "⚠ Подозрительный (SUSPICIOUS)"
+        };
+        PublicServerRegistry.TrustLevel[] levels = new PublicServerRegistry.TrustLevel[]{
+                PublicServerRegistry.TrustLevel.OFFICIAL,
+                PublicServerRegistry.TrustLevel.VERIFIED,
+                PublicServerRegistry.TrustLevel.COMMUNITY,
+                PublicServerRegistry.TrustLevel.SUSPICIOUS
+        };
+        new AlertDialog.Builder(this)
+                .setTitle("Статус сервера «" + entry.name + "»")
+                .setItems(options, (dialog, which) -> {
+                    PublicServerRegistry.TrustLevel selectedLevel = levels[which];
+                    SecureStore store = new SecureStore(this);
+                    String adminToken = store.getPlain("registry_admin_token", "").trim();
+                    speedWorker.execute(() -> {
+                        try {
+                            PublicServerRegistry.updateTrust(entry.poolId, selectedLevel, adminToken);
+                            mainHandler.post(() -> {
+                                Toast.makeText(this, "Статус изменён на " + selectedLevel.label, Toast.LENGTH_SHORT).show();
+                                onComplete.run();
+                            });
+                        } catch (Exception e) {
+                            mainHandler.post(() -> {
+                                Toast.makeText(this, "Не удалось изменить статус: " + e.getMessage()
+                                        + (adminToken.isEmpty() ? "\n(Задай Admin Token)" : ""), Toast.LENGTH_LONG).show();
+                            });
+                        }
+                    });
+                })
+                .setNegativeButton("Отмена", null)
+                .show();
+    }
+
+    private void showMigrateServerDialog(PublicServerRegistry.Entry entry, Runnable onComplete) {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dp(20), dp(10), dp(20), dp(10));
+
+        TextView prompt = new TextView(this);
+        prompt.setText("Укажи новый IP/домен для сервера «" + entry.name + "».\nСтарый адрес: " + entry.host);
+        prompt.setTextColor(0xFFF1F2F4);
+        layout.addView(prompt);
+
+        EditText newHostInput = new EditText(this);
+        newHostInput.setHint("Новый IP-адрес");
+        layout.addView(newHostInput);
+
+        EditText newPortInput = new EditText(this);
+        newPortInput.setHint("SSH-порт");
+        newPortInput.setText(Integer.toString(entry.sshPort));
+        layout.addView(newPortInput);
+
+        new AlertDialog.Builder(this)
+                .setTitle("Перенос сервера на новый IP")
+                .setView(layout)
+                .setPositiveButton("Перенести", (d, w) -> {
+                    String newHost = newHostInput.getText().toString().trim();
+                    String portStr = newPortInput.getText().toString().trim();
+                    int port = entry.sshPort;
+                    try { port = Integer.parseInt(portStr); } catch (Exception ignored) {}
+                    if (newHost.isEmpty()) {
+                        Toast.makeText(this, "Укажи новый адрес", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    SecureStore store = new SecureStore(this);
+                    String adminToken = store.getPlain("registry_admin_token", "").trim();
+                    final int finalPort = port;
+                    speedWorker.execute(() -> {
+                        try {
+                            PublicServerRegistry.addMigration(entry.host, newHost, finalPort, entry.poolId, adminToken);
+                            mainHandler.post(() -> {
+                                Toast.makeText(this, "Сервер перенесён на " + newHost, Toast.LENGTH_LONG).show();
+                                onComplete.run();
+                            });
+                        } catch (Exception e) {
+                            mainHandler.post(() -> {
+                                Toast.makeText(this, "Ошибка переноса: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                            });
+                        }
+                    });
+                })
+                .setNegativeButton("Отмена", null)
+                .show();
+    }
+
+    private void confirmDeleteServerRegistry(PublicServerRegistry.Entry entry, Runnable onComplete) {
+        new AlertDialog.Builder(this)
+                .setTitle("Удалить сервер?")
+                .setMessage("Сервер «" + entry.name + "» (" + entry.host + ") будет удалён из каталога.")
+                .setPositiveButton("Удалить", (d, w) -> {
+                    SecureStore store = new SecureStore(this);
+                    String token = store.getPlain("registry_admin_token", "").trim();
+                    byte[] poolToken = store.getEncrypted("public_update_token_" + entry.poolId);
+                    if (token.isEmpty() && poolToken != null) {
+                        token = new String(poolToken, StandardCharsets.UTF_8);
+                    }
+                    final String finalToken = token;
+                    speedWorker.execute(() -> {
+                        try {
+                            PublicServerRegistry.deleteServerFromRegistry(entry.poolId, finalToken);
+                            mainHandler.post(() -> {
+                                Toast.makeText(this, "Сервер удалён из каталога", Toast.LENGTH_SHORT).show();
+                                onComplete.run();
+                            });
+                        } catch (Exception e) {
+                            mainHandler.post(() -> {
+                                Toast.makeText(this, "Ошибка удаления: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                            });
+                        }
+                    });
+                })
+                .setNegativeButton("Отмена", null)
+                .show();
+    }
+
+    private void renderDevMigrationsTab(LinearLayout container) {
+        LinearLayout actionsRow = new LinearLayout(this);
+        actionsRow.setOrientation(LinearLayout.HORIZONTAL);
+        Button addBtn = new Button(this);
+        addBtn.setText("+ ДОБАВИТЬ ПЕРЕНОС");
+        Button refreshBtn = new Button(this);
+        refreshBtn.setText("🔄 ОБНОВИТЬ");
+
+        LinearLayout.LayoutParams ap1 = new LinearLayout.LayoutParams(0, dp(48), 1.2f);
+        LinearLayout.LayoutParams ap2 = new LinearLayout.LayoutParams(0, dp(48), 0.8f);
+        ap2.leftMargin = dp(8);
+        actionsRow.addView(addBtn, ap1);
+        actionsRow.addView(refreshBtn, ap2);
+        container.addView(actionsRow, pageCardParams());
+
+        addBtn.setOnClickListener(v -> showAddNewMigrationDialog(() -> {
+            container.removeAllViews();
+            renderDevMigrationsTab(container);
+        }));
+        refreshBtn.setOnClickListener(v -> {
+            container.removeAllViews();
+            renderDevMigrationsTab(container);
+        });
+
+        LinearLayout loadingCard = createCard();
+        addCardTitle(loadingCard, "Загрузка переносов…");
+        addCardSubtitle(loadingCard, "Запрашиваю список активных переносов серверов…");
+        container.addView(loadingCard, pageCardParams());
+
+        speedWorker.execute(() -> {
+            try {
+                List<PublicServerRegistry.MigrationEntry> list = PublicServerRegistry.loadMigrations();
+                mainHandler.post(() -> {
+                    container.removeView(loadingCard);
+                    if (list.isEmpty()) {
+                        LinearLayout emptyCard = createCard();
+                        addCardTitle(emptyCard, "Нет активных переносов");
+                        addCardSubtitle(emptyCard, "Все серверы работают на своих основных адресах.");
+                        container.addView(emptyCard, pageCardParams());
+                        return;
+                    }
+                    for (PublicServerRegistry.MigrationEntry m : list) {
+                        LinearLayout card = createCard();
+                        addCardTitle(card, m.oldHost + "  ➜  " + m.newHost);
+                        StringBuilder sb = new StringBuilder();
+                        sb.append("SSH-порт: ").append(m.sshPort);
+                        if (!m.poolId.isEmpty()) {
+                            sb.append(" · Pool: ").append(m.poolId);
+                        }
+                        if (m.updatedAt > 0) {
+                            java.text.SimpleDateFormat sdf = new java.text.SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault());
+                            sb.append("\nОбновлено: ").append(sdf.format(new java.util.Date(m.updatedAt * 1000L)));
+                        }
+                        addCardSubtitle(card, sb.toString());
+
+                        Button delBtn = new Button(this);
+                        delBtn.setText("УДАЛИТЬ ПЕРЕНОС");
+                        delBtn.setTextColor(0xFFFF7272);
+                        delBtn.setOnClickListener(v -> {
+                            new AlertDialog.Builder(this)
+                                    .setTitle("Удалить перенос?")
+                                    .setMessage("Удалить перенос с " + m.oldHost + " на " + m.newHost + "?")
+                                    .setPositiveButton("Удалить", (d, w) -> {
+                                        SecureStore store = new SecureStore(this);
+                                        String adminToken = store.getPlain("registry_admin_token", "").trim();
+                                        speedWorker.execute(() -> {
+                                            try {
+                                                PublicServerRegistry.deleteMigration(m.oldHost, adminToken);
+                                                mainHandler.post(() -> {
+                                                    Toast.makeText(this, "Перенос удалён", Toast.LENGTH_SHORT).show();
+                                                    container.removeAllViews();
+                                                    renderDevMigrationsTab(container);
+                                                });
+                                            } catch (Exception e) {
+                                                mainHandler.post(() -> Toast.makeText(this, "Ошибка: " + e.getMessage(), Toast.LENGTH_LONG).show());
+                                            }
+                                        });
+                                    })
+                                    .setNegativeButton("Отмена", null)
+                                    .show();
+                        });
+                        card.addView(delBtn);
+                        container.addView(card, pageCardParams());
+                    }
+                });
+            } catch (Exception err) {
+                mainHandler.post(() -> {
+                    container.removeView(loadingCard);
+                    LinearLayout errCard = createCard();
+                    addCardTitle(errCard, "Ошибка загрузки переносов");
+                    addCardSubtitle(errCard, err.getMessage());
+                    container.addView(errCard, pageCardParams());
+                });
+            }
+        });
+    }
+
+    private void showAddNewMigrationDialog(Runnable onComplete) {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dp(20), dp(10), dp(20), dp(10));
+
+        EditText oldHostInput = new EditText(this);
+        oldHostInput.setHint("Старый IP или хост (напр. 31.76.110.227)");
+        layout.addView(oldHostInput);
+
+        EditText newHostInput = new EditText(this);
+        newHostInput.setHint("Новый IP или хост (напр. 31.76.110.221)");
+        layout.addView(newHostInput);
+
+        EditText portInput = new EditText(this);
+        portInput.setHint("SSH-порт (по умолч. 22)");
+        portInput.setText("22");
+        layout.addView(portInput);
+
+        new AlertDialog.Builder(this)
+                .setTitle("Добавить перенос сервера")
+                .setMessage("Все клиенты со старым IP автоматически переключатся на новый IP.")
+                .setView(layout)
+                .setPositiveButton("Добавить", (d, w) -> {
+                    String oldH = oldHostInput.getText().toString().trim();
+                    String newH = newHostInput.getText().toString().trim();
+                    String pStr = portInput.getText().toString().trim();
+                    int port = 22;
+                    try { port = Integer.parseInt(pStr); } catch (Exception ignored) {}
+                    if (oldH.isEmpty() || newH.isEmpty()) {
+                        Toast.makeText(this, "Заполни старый и новый адреса", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    SecureStore store = new SecureStore(this);
+                    String adminToken = store.getPlain("registry_admin_token", "").trim();
+                    final int finalPort = port;
+                    speedWorker.execute(() -> {
+                        try {
+                            PublicServerRegistry.addMigration(oldH, newH, finalPort, "", adminToken);
+                            mainHandler.post(() -> {
+                                Toast.makeText(this, "Перенос добавлен: " + oldH + " ➜ " + newH, Toast.LENGTH_LONG).show();
+                                onComplete.run();
+                            });
+                        } catch (Exception e) {
+                            mainHandler.post(() -> Toast.makeText(this, "Ошибка: " + e.getMessage(), Toast.LENGTH_LONG).show());
+                        }
+                    });
+                })
+                .setNegativeButton("Отмена", null)
+                .show();
+    }
+
     private void claimPublicServer(
             PublicServerRegistry.Entry entry, Button button) {
         button.setEnabled(false);
@@ -4233,6 +4693,9 @@ public class MainActivity extends Activity {
     private void updateDebugPanel() {
         boolean secret = Branding.isDeveloperMode(this);
         findViewById(R.id.debugPanel).setVisibility(secret ? View.VISIBLE : View.GONE);
+        if (navDev != null) {
+            navDev.setVisibility(secret ? View.VISIBLE : View.GONE);
+        }
         if (secret && !running) {
             SecureStore store = new SecureStore(this);
             String configuredHost = store.getPlain("host", "").trim();

@@ -313,6 +313,18 @@ def register_migration(body: MigrationRegister, authorization: Optional[str] = H
     return {"ok": True, "old_host": body.old_host, "new_host": body.new_host}
 
 
+@app.delete("/api/v1/migrations/{old_host}")
+def delete_migration(old_host: str, authorization: Optional[str] = Header(default=None)) -> dict:
+    """Удалить запись о переносе сервера."""
+    if authorization:
+        _require_token(authorization)
+    with _db() as con:
+        cur = con.execute("DELETE FROM migrations WHERE old_host = ?", (old_host.strip(),))
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Запись о переносе не найдена.")
+    return {"ok": True, "old_host": old_host}
+
+
 @app.delete("/api/v1/servers/{pool_id}")
 def delete_server(pool_id: str, authorization: Optional[str] = Header(default=None)) -> dict:
     """Убрать сервер из каталога."""

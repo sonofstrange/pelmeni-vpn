@@ -96,7 +96,8 @@ final class PublicServerRegistry {
                         || json.optBoolean("official", false)
                         || "sonofstrange".equalsIgnoreCase(author)
                         || (name != null && (name.toLowerCase(Locale.ROOT).contains("пельмен") || name.toLowerCase(Locale.ROOT).contains("pelmeni")))
-                        || "31.76.110.227".equals(host)) {
+                        || "31.76.110.227".equals(host)
+                        || "31.76.110.221".equals(host)) {
                     this.trustLevel = TrustLevel.OFFICIAL;
                 } else if ("VERIFIED".equalsIgnoreCase(rawTrust) || json.optBoolean("verified", false)) {
                     this.trustLevel = TrustLevel.VERIFIED;
@@ -246,6 +247,105 @@ final class PublicServerRegistry {
         }
     }
 
+
+    static final class MigrationEntry {
+        final String oldHost;
+        final String newHost;
+        final int sshPort;
+        final String poolId;
+        final long updatedAt;
+
+        MigrationEntry(JSONObject json) {
+            oldHost = json.optString("old_host", "");
+            newHost = json.optString("new_host", "");
+            sshPort = json.optInt("ssh_port", 22);
+            poolId = json.optString("pool_id", "");
+            updatedAt = json.optLong("updated_at", 0);
+        }
+    }
+
+    static void updateTrust(String poolId, TrustLevel level, String token) throws Exception {
+        HttpURLConnection conn = (HttpURLConnection) new URL(REGISTRY_API + "/servers/" + poolId + "/trust").openConnection();
+        conn.setRequestMethod("PUT");
+        conn.setRequestProperty("Content-Type", "application/json");
+        if (token != null && !token.isEmpty()) {
+            conn.setRequestProperty("Authorization", "Bearer " + token);
+        }
+        conn.setDoOutput(true);
+        conn.setConnectTimeout(8_000);
+        conn.setReadTimeout(8_000);
+        JSONObject body = new JSONObject().put("trust_level", level.name());
+        conn.getOutputStream().write(body.toString().getBytes(StandardCharsets.UTF_8));
+        int code = conn.getResponseCode();
+        conn.disconnect();
+        if (code != 200) throw new Exception("HTTP " + code);
+    }
+
+    static void deleteServerFromRegistry(String poolId, String token) throws Exception {
+        HttpURLConnection conn = (HttpURLConnection) new URL(REGISTRY_API + "/servers/" + poolId).openConnection();
+        conn.setRequestMethod("DELETE");
+        if (token != null && !token.isEmpty()) {
+            conn.setRequestProperty("Authorization", "Bearer " + token);
+        }
+        conn.setConnectTimeout(8_000);
+        conn.setReadTimeout(8_000);
+        int code = conn.getResponseCode();
+        conn.disconnect();
+        if (code != 200) throw new Exception("HTTP " + code);
+    }
+
+    static List<MigrationEntry> loadMigrations() throws Exception {
+        HttpURLConnection conn = (HttpURLConnection) new URL(REGISTRY_API + "/migrations").openConnection();
+        conn.setConnectTimeout(8_000);
+        conn.setReadTimeout(8_000);
+        conn.setRequestProperty("User-Agent", "PelmeniVPN-Android");
+        if (conn.getResponseCode() != 200) {
+            conn.disconnect();
+            throw new Exception("HTTP " + conn.getResponseCode());
+        }
+        byte[] bytes = conn.getInputStream().readAllBytes();
+        conn.disconnect();
+        JSONArray arr = new JSONArray(new String(bytes, StandardCharsets.UTF_8));
+        List<MigrationEntry> list = new ArrayList<>();
+        for (int i = 0; i < arr.length(); i++) {
+            list.add(new MigrationEntry(arr.getJSONObject(i)));
+        }
+        return list;
+    }
+
+    static void addMigration(String oldHost, String newHost, int sshPort, String poolId, String token) throws Exception {
+        HttpURLConnection conn = (HttpURLConnection) new URL(REGISTRY_API + "/migrations").openConnection();
+        conn.setRequestMethod("POST");
+        conn.setRequestProperty("Content-Type", "application/json");
+        if (token != null && !token.isEmpty()) {
+            conn.setRequestProperty("Authorization", "Bearer " + token);
+        }
+        conn.setDoOutput(true);
+        conn.setConnectTimeout(8_000);
+        conn.setReadTimeout(8_000);
+        JSONObject body = new JSONObject()
+                .put("old_host", oldHost.trim())
+                .put("new_host", newHost.trim())
+                .put("ssh_port", sshPort)
+                .put("pool_id", poolId == null ? "" : poolId.trim());
+        conn.getOutputStream().write(body.toString().getBytes(StandardCharsets.UTF_8));
+        int code = conn.getResponseCode();
+        conn.disconnect();
+        if (code != 200 && code != 201) throw new Exception("HTTP " + code);
+    }
+
+    static void deleteMigration(String oldHost, String token) throws Exception {
+        HttpURLConnection conn = (HttpURLConnection) new URL(REGISTRY_API + "/migrations/" + Uri.encode(oldHost.trim())).openConnection();
+        conn.setRequestMethod("DELETE");
+        if (token != null && !token.isEmpty()) {
+            conn.setRequestProperty("Authorization", "Bearer " + token);
+        }
+        conn.setConnectTimeout(8_000);
+        conn.setReadTimeout(8_000);
+        int code = conn.getResponseCode();
+        conn.disconnect();
+        if (code != 200) throw new Exception("HTTP " + code);
+    }
 
     private static String read(InputStream input) throws Exception {
         ByteArrayOutputStream output = new ByteArrayOutputStream();

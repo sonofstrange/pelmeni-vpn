@@ -3246,7 +3246,7 @@ public class MainActivity extends Activity {
         addCardTitle(tokenCard, "Ключ администратора API");
         addCardSubtitle(tokenCard, savedToken.isEmpty()
                 ? "Admin token не задан. Для изменения статуса (trust level) требуется токен администратора."
-                : "Токен сохранён (" + (savedToken.length() > 6 ? savedToken.substring(0, 6) + "…" : "••••") + ")");
+                : "Токен сохранён: " + savedToken);
         Button tokenBtn = new Button(this);
         tokenBtn.setText(savedToken.isEmpty() ? "ЗАДАТЬ ADMIN TOKEN" : "ИЗМЕНИТЬ ADMIN TOKEN");
         tokenBtn.setOnClickListener(v -> showAdminTokenDialog());
@@ -3302,17 +3302,50 @@ public class MainActivity extends Activity {
     private void showAdminTokenDialog() {
         SecureStore store = new SecureStore(this);
         String current = store.getPlain("registry_admin_token", "").trim();
+
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dp(20), dp(10), dp(20), dp(10));
+
         EditText input = new EditText(this);
         input.setHint("Bearer-токен администратора");
         input.setText(current);
+        input.setTextColor(0xFFFFFFFF);
         input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        FrameLayout wrapper = new FrameLayout(this);
-        wrapper.setPadding(dp(20), dp(10), dp(20), dp(10));
-        wrapper.addView(input);
+        layout.addView(input);
+
+        CheckBox showTokenBox = new CheckBox(this);
+        showTokenBox.setText("Показать токен полностью");
+        showTokenBox.setTextColor(0xFFD7D8DB);
+        showTokenBox.setOnCheckedChangeListener((btn, checked) -> {
+            int pos = input.getSelectionStart();
+            input.setInputType(checked
+                    ? InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+                    : InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+            input.setSelection(Math.max(0, Math.min(pos, input.length())));
+        });
+        layout.addView(showTokenBox);
+
+        if (!current.isEmpty()) {
+            Button copyBtn = new Button(this);
+            copyBtn.setText("СКОПИРОВАТЬ ТОКЕН");
+            copyBtn.setOnClickListener(v -> {
+                ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                if (cm != null) {
+                    cm.setPrimaryClip(ClipData.newPlainText("Admin Token", input.getText().toString().trim()));
+                    Toast.makeText(this, "Токен скопирован в буфер", Toast.LENGTH_SHORT).show();
+                }
+            });
+            LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            cp.topMargin = dp(6);
+            layout.addView(copyBtn, cp);
+        }
+
         new AlertDialog.Builder(this)
                 .setTitle("Admin Token реестра")
                 .setMessage("Токен используется для подтверждения прав администратора при изменении trust_level и управлении записями.")
-                .setView(wrapper)
+                .setView(layout)
                 .setPositiveButton("Сохранить", (d, w) -> {
                     String val = input.getText().toString().trim();
                     store.putPlain("registry_admin_token", val);
